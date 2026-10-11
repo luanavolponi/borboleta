@@ -3,6 +3,7 @@
 Banco de dados (SQLite) do app Borboleta Estudio Criativo.
 Estoque de filamentos/insumos/produtos, clientes, pedidos e financeiro.
 """
+import calendar
 import os
 import sqlite3
 from datetime import date, datetime
@@ -17,7 +18,7 @@ MATERIAIS = ["PLA", "PLA Silk", "PETG", "ABS", "TPU", "Resina", "Outro"]
 CATEGORIAS_ENTRADA = ["Venda", "Aporte dos sócios", "Outros"]
 CATEGORIAS_SAIDA = [
     "Filamento", "Insumos", "Embalagem", "Equipamentos", "Manutenção", "Energia",
-    "Frete", "Marketing", "Taxas/Marketplace", "Impostos (MEI)", "Pró-labore", "Outros",
+    "Frete", "Marketing", "Taxas/Marketplace", "Juros e tarifas", "Impostos (MEI)", "Pró-labore", "Outros",
 ]
 
 CONFIG_PADRAO = {
@@ -153,12 +154,30 @@ def init_db():
             pedido_id INTEGER,
             criado_por TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS compras_parceladas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_compra TEXT NOT NULL,
+            descricao TEXT NOT NULL,
+            fornecedor TEXT DEFAULT '',
+            categoria TEXT DEFAULT '',
+            valor_total REAL NOT NULL,
+            n_parcelas INTEGER NOT NULL,
+            primeiro_vencimento TEXT NOT NULL,
+            forma_pagamento TEXT DEFAULT '',
+            criado_por TEXT DEFAULT ''
+        );
         CREATE TABLE IF NOT EXISTS acessos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT,
             quando TEXT
         );
         """)
+        # Migracoes: colunas novas em bancos ja existentes
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(lancamentos)")}
+        for col, tipo in [("pago", "INTEGER DEFAULT 1"), ("parcelamento_id", "INTEGER"),
+                          ("parcela_num", "INTEGER"), ("parcela_total", "INTEGER")]:
+            if col not in cols:
+                c.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {tipo}")
         for k, v in CONFIG_PADRAO.items():
             c.execute("INSERT OR IGNORE INTO config(chave, valor) VALUES (?, ?)", (k, v))
 
@@ -316,8 +335,12 @@ def ajustar_estoque(tipo_item, item_id, qtd, motivo):
         _mover(c, tipo_item, item_id, qtd, motivo)
 
 
-def registrar_compra(tipo_item, item_id, qtd, valor_total, data, lancar_financeiro, usuario=""):
-    """Entrada de estoque por compra (filamento em gramas, insumo na unidade dele)."""
+def registrar_compra(tipo_item, item_id, qtd, valor_total, data, lancar_financeiro, usuario="",
+                     n_parcelas=1, primeiro_vencimento=None, forma_pagamento=""):
+    """Entrada de estoque por compra (filamento em gramas, insumo na unidade dele).
+
+    Com n_parcelas > 1 a despesa vira uma compra parcelada (uma saida por mes).
+    """
     with _conn() as c:
         if tipo_item == "filamento":
             f = dict(c.execute("SELECT * FROM filamentos WHERE id=?", (item_id,)).fetchone())
@@ -325,11 +348,11 @@ def registrar_compra(tipo_item, item_id, qtd, valor_total, data, lancar_financei
         else:
             i = dict(c.execute("SELECT * FROM insumos WHERE id=?", (item_id,)).fetchone())
             nome, categoria = i["nome"], "Insumos"
-        _mover(c, tipo_item, item_id, qtd, f"Compra (R$ {valor_total:.2f})", data=data)
+        parc = f" em {n_parcelas}x" if n_parcelas > 1 else ""
+        _mover(c, tipo_item, item_id, qtd, f"Compra (R$ {valor_total:.2f}{parc})", data=data)
         if lancar_financeiro and valor_total > 0:
-            c.execute("""INSERT INTO lancamentos(data, tipo, categoria, descricao, valor, criado_por)
-                         VALUES (?, 'saida', ?, ?, ?, ?)""",
-                      (data, categoria, f"Compra: {nome}", valor_total, usuario))
+            _lancar_despesa(c, f"Compra: {nome}", categoria, valor_total, n_parcelas,
+                            primeiro_vencimento or data, data, forma_pagamento, usuario=usuario)
 
 
 def registrar_producao(produto_id, qtd, motivo="Produção", pedido_id=None, c=None):
@@ -528,15 +551,115 @@ def listar_lancamentos(data_ini=None, data_fim=None):
         return _rows(c.execute(sql + " ORDER BY data DESC, id DESC", args))
 
 
-def inserir_lancamento(data, tipo, categoria, descricao, valor, forma_pagamento="", usuario=""):
+def inserir_lancamento(data, tipo, categoria, descricao, valor, forma_pagamento="", usuario="", pago=True):
     with _conn() as c:
-        c.execute("""INSERT INTO lancamentos(data, tipo, categoria, descricao, valor, forma_pagamento, criado_por)
-                     VALUES (?,?,?,?,?,?,?)""",
-                  (data, tipo, categoria, descricao, abs(float(valor)), forma_pagamento, usuario))
+        c.execute("""INSERT INTO lancamentos(data, tipo, categoria, descricao, valor, forma_pagamento, criado_por, pago)
+                     VALUES (?,?,?,?,?,?,?,?)""",
+                  (data, tipo, categoria, descricao, abs(float(valor)), forma_pagamento, usuario, 1 if pago else 0))
+
+
+def somar_meses(d, n):
+    """Mesma data n meses depois (dia 31 vira o ultimo dia do mes, se preciso)."""
+    m = d.month - 1 + n
+    y = d.year + m // 12
+    m = m % 12 + 1
+    return date(y, m, min(d.day, calendar.monthrange(y, m)[1]))
+
+
+def _valores_parcelas(total, n):
+    """Divide em n parcelas; a ultima absorve os centavos do arredondamento."""
+    base = round(total / n, 2)
+    return [base] * (n - 1) + [round(total - base * (n - 1), 2)]
+
+
+def _lancar_despesa(c, descricao, categoria, valor_total, n_parcelas, primeiro_vencimento, data_compra,
+                    forma_pagamento="", fornecedor="", usuario=""):
+    """Lanca uma despesa a vista (1 saida) ou parcelada (1 saida por mes, ligadas a uma compra).
+
+    Cada parcela entra no mes do seu vencimento. Parcelas com vencimento ate hoje ja
+    nascem pagas; as futuras ficam 'a pagar'. Retorna o id da compra parcelada (ou None).
+    """
+    n = max(int(n_parcelas or 1), 1)
+    venc0 = date.fromisoformat(str(primeiro_vencimento)[:10])
+    hoje = date.today()
+    parc_id = None
+    if n > 1:
+        cur = c.execute("""INSERT INTO compras_parceladas(data_compra, descricao, fornecedor, categoria, valor_total,
+                           n_parcelas, primeiro_vencimento, forma_pagamento, criado_por)
+                           VALUES (?,?,?,?,?,?,?,?,?)""",
+                        (str(data_compra)[:10], descricao, fornecedor, categoria, float(valor_total), n,
+                         venc0.isoformat(), forma_pagamento, usuario))
+        parc_id = cur.lastrowid
+    for i, v in enumerate(_valores_parcelas(float(valor_total), n)):
+        venc = somar_meses(venc0, i)
+        c.execute("""INSERT INTO lancamentos(data, tipo, categoria, descricao, valor, forma_pagamento, criado_por,
+                     pago, parcelamento_id, parcela_num, parcela_total)
+                     VALUES (?, 'saida', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                  (venc.isoformat(), categoria, f"{descricao} ({i + 1}/{n})" if n > 1 else descricao, v,
+                   forma_pagamento, usuario, 1 if venc <= hoje else 0, parc_id,
+                   i + 1 if n > 1 else None, n if n > 1 else None))
+    return parc_id
+
+
+def registrar_despesa(descricao, categoria, valor_total, n_parcelas, primeiro_vencimento, data_compra,
+                      forma_pagamento="", fornecedor="", usuario=""):
+    with _conn() as c:
+        return _lancar_despesa(c, descricao, categoria, valor_total, n_parcelas, primeiro_vencimento,
+                               data_compra, forma_pagamento, fornecedor, usuario)
+
+
+def listar_parcelamentos():
+    """Compras parceladas com o andamento (pagas, restante, proxima parcela)."""
+    with _conn() as c:
+        compras = _rows(c.execute("SELECT * FROM compras_parceladas ORDER BY data_compra DESC, id DESC"))
+        for p in compras:
+            parcelas = _rows(c.execute("SELECT * FROM lancamentos WHERE parcelamento_id=? ORDER BY parcela_num",
+                                       (p["id"],)))
+            p["parcelas"] = parcelas
+            p["pagas"] = sum(1 for l in parcelas if l["pago"])
+            p["valor_pago"] = sum(l["valor"] for l in parcelas if l["pago"])
+            p["valor_restante"] = sum(l["valor"] for l in parcelas if not l["pago"])
+            p["proxima"] = next((l for l in parcelas if not l["pago"]), None)
+    return compras
+
+
+def excluir_parcelamento(parc_id):
+    """Apaga a compra parcelada e TODAS as parcelas dela."""
+    with _conn() as c:
+        c.execute("DELETE FROM lancamentos WHERE parcelamento_id=?", (parc_id,))
+        c.execute("DELETE FROM compras_parceladas WHERE id=?", (parc_id,))
+
+
+def contas_a_pagar():
+    """Saidas ainda nao pagas (vencidas e futuras), da mais antiga para a mais nova."""
+    with _conn() as c:
+        return _rows(c.execute("""SELECT * FROM lancamentos WHERE tipo='saida' AND COALESCE(pago, 1)=0
+                                  ORDER BY data, id"""))
+
+
+def marcar_pago(ids, pago=True):
+    with _conn() as c:
+        c.executemany("UPDATE lancamentos SET pago=? WHERE id=?", [(1 if pago else 0, i) for i in ids])
+
+
+def marcar_vencidas_pagas():
+    """Marca como pagas as saidas com vencimento ate hoje. Retorna quantas mudaram."""
+    with _conn() as c:
+        cur = c.execute("UPDATE lancamentos SET pago=1 WHERE tipo='saida' AND COALESCE(pago, 1)=0 AND data<=?",
+                        (_hoje(),))
+        return cur.rowcount
+
+
+def projecao_a_pagar():
+    """Total ainda a pagar por mes de vencimento (YYYY-MM)."""
+    with _conn() as c:
+        return _rows(c.execute("""SELECT substr(data, 1, 7) AS mes, SUM(valor) AS valor, COUNT(*) AS qtd
+                                  FROM lancamentos WHERE tipo='saida' AND COALESCE(pago, 1)=0
+                                  GROUP BY mes ORDER BY mes"""))
 
 
 def atualizar_lancamento(lanc_id, dados):
-    permitidos = ["data", "tipo", "categoria", "descricao", "valor", "forma_pagamento"]
+    permitidos = ["data", "tipo", "categoria", "descricao", "valor", "forma_pagamento", "pago"]
     dados = {k: v for k, v in dados.items() if k in permitidos}
     if not dados:
         return
@@ -551,13 +674,17 @@ def excluir_lancamento(lanc_id):
 
 
 def resumo_mensal(meses=12):
-    """Entradas/saidas por mes (YYYY-MM) dos ultimos N meses com movimento."""
+    """Entradas/saidas por mes (YYYY-MM) dos ultimos N meses com movimento, ate o mes atual.
+
+    Parcelas futuras ficam de fora (elas aparecem em projecao_a_pagar).
+    """
     with _conn() as c:
         rows = _rows(c.execute("""
             SELECT substr(data, 1, 7) AS mes,
                    SUM(CASE WHEN tipo='entrada' THEN valor ELSE 0 END) AS entradas,
                    SUM(CASE WHEN tipo='saida' THEN valor ELSE 0 END) AS saidas
-            FROM lancamentos GROUP BY mes ORDER BY mes DESC LIMIT ?""", (meses,)))
+            FROM lancamentos WHERE substr(data, 1, 7) <= ?
+            GROUP BY mes ORDER BY mes DESC LIMIT ?""", (_hoje()[:7], meses)))
     rows.reverse()
     for r in rows:
         r["resultado"] = r["entradas"] - r["saidas"]
@@ -565,15 +692,16 @@ def resumo_mensal(meses=12):
 
 
 def saldo_caixa():
+    """Dinheiro que de fato entrou menos o que de fato foi pago (ignora contas a pagar)."""
     with _conn() as c:
         r = c.execute("""SELECT COALESCE(SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END), 0)
-                         FROM lancamentos""").fetchone()
+                         FROM lancamentos WHERE COALESCE(pago, 1)=1""").fetchone()
         return r[0]
 
 
 def exportar_tabelas():
     """Todas as tabelas como {nome: lista de dicts} (para o Excel)."""
     nomes = ["clientes", "pedidos", "pedido_itens", "produtos", "filamentos", "insumos",
-             "impressoras", "lancamentos", "movimentos", "config"]
+             "impressoras", "lancamentos", "compras_parceladas", "movimentos", "config"]
     with _conn() as c:
         return {n: _rows(c.execute(f"SELECT * FROM {n}")) for n in nomes}

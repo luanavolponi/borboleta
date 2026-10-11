@@ -196,6 +196,8 @@ DINHEIRO = "R$ %.2f"
 
 def salvo(msg="Salvo!"):
     """Envia o banco para a nuvem (quando publicado) e avisa."""
+    # Recria as tabelas editaveis do zero (edicoes antigas nao "pulam" para outra linha)
+    st.session_state["ed_v"] = st.session_state.get("ed_v", 0) + 1
     if is_cloud():
         try:
             if not push_database():
@@ -205,6 +207,11 @@ def salvo(msg="Salvo!"):
             st.toast(f"Erro ao salvar na nuvem: {e}", icon="❌")
             return
     st.toast(msg, icon="✅")
+
+
+def ev():
+    """Versao das tabelas editaveis (muda a cada salvamento)."""
+    return st.session_state.get("ed_v", 0)
 
 
 def brl(v):
@@ -409,11 +416,15 @@ def pagina_inicio():
         ("Resultado do mês", brl(entradas - saidas), VERDE if entradas >= saidas else VERMELHO,
          "entradas − despesas"),
     ])
+    contas = db.contas_a_pagar()
+    hoje = date.today()
+    a_pagar_30 = [l for l in contas if (para_data(l["data"]) or hoje) <= hoje + timedelta(days=30)]
     linha_cards([
-        ("Pedidos em aberto", str(len(abertos)), AZUL, "confirmados, produzindo ou prontos"),
+        ("Pedidos em aberto", str(len(abertos)), AZUL, f"+ {len(orcamentos)} orçamento(s) pendente(s)"),
         ("A receber", brl(a_receber), AMBAR, "de pedidos já fechados"),
-        ("Orçamentos pendentes", str(len(orcamentos)), ROSA, "ainda não confirmados"),
-        ("Saldo em caixa", brl(db.saldo_caixa()), ROXO, "todas as entradas − saídas"),
+        ("A pagar em 30 dias", brl(sum(l["valor"] for l in a_pagar_30)), VERMELHO,
+         f"inclui vencidas · total em aberto {brl(sum(l['valor'] for l in contas))}"),
+        ("Saldo em caixa", brl(db.saldo_caixa()), ROXO, "só o que já entrou e já foi pago"),
     ])
 
     col_a, col_b = st.columns([3, 2])
@@ -443,6 +454,14 @@ def pagina_inicio():
                                         "A receber": st.column_config.NumberColumn(format=DINHEIRO)})
 
     with col_b:
+        vencendo = [l for l in contas if (para_data(l["data"]) or hoje) <= hoje + timedelta(days=7)]
+        if vencendo:
+            st.markdown("#### 📌 Contas da semana")
+            for l in vencendo[:6]:
+                st.warning(f"**{l['descricao']}** — {brl(l['valor'])} · "
+                           f"{situacao_vencimento(l['data'], False)}")
+            if len(vencendo) > 6:
+                st.caption(f"+ {len(vencendo) - 6} outra(s) em 💰 Financeiro → Contas a pagar")
         st.markdown("#### 🚨 Estoque baixo")
         fil, ins, prod = db.get_alertas_estoque()
         if not (fil or ins or prod):
@@ -774,7 +793,7 @@ def pagina_clientes():
     } for c in clientes], columns=["id", "Nome", "WhatsApp", "Instagram", "E-mail", "Cidade", "Obs", "Pedidos",
                                    "Total comprado", "Último pedido", "Excluir?"])
     st.caption("Edite direto na tabela e clique em **Salvar alterações**.")
-    edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"cli_editor_{termo}",
+    edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"cli_editor_{termo}_{ev()}",
                           disabled=["Pedidos", "Total comprado", "Último pedido"],
                           column_config={"id": None,
                                          "Total comprado": st.column_config.NumberColumn(format=DINHEIRO)})
@@ -922,7 +941,7 @@ def pagina_produtos():
         st.caption("Edite os dados e clique em **Salvar**. *Custo*, *Sugerido* e *Lucro/peça* são recalculados "
                    "ao salvar. Desmarque **Ativo** para tirar um produto de linha sem perder o histórico.")
         edit = st.data_editor(
-            df, hide_index=True, use_container_width=True, key="cat_editor",
+            df, hide_index=True, use_container_width=True, key=f"cat_editor_{ev()}",
             disabled=["Custo", "Sugerido", "Lucro/peça", "Prontas"],
             column_config={
                 "id": None,
@@ -974,16 +993,19 @@ def form_compra(tipo, opcoes, unidade_fn, key):
                                 help="Deixe 0 para usar o preço cadastrado × quantidade.")
         data_c = st.date_input("Data da compra", value=date.today(), format="DD/MM/YYYY", key=f"compra_data_{key}")
         lancar = st.checkbox("Lançar como despesa no Financeiro", value=True, key=f"compra_lancar_{key}")
+        n_parc, venc, forma = campos_pagamento(f"compra_{key}", forma_padrao="Pix", colunas=False)
         if st.form_submit_button("Registrar compra", type="primary") and label in opcoes and qtd > 0:
             item = opcoes[label]
             if tipo == "filamento":
                 gramas = qtd * (item["peso_rolo_g"] or 1000)
                 total = valor or qtd * (item["preco_rolo"] or 0)
-                db.registrar_compra("filamento", item["id"], gramas, total, data_c.isoformat(), lancar, USUARIO)
+                db.registrar_compra("filamento", item["id"], gramas, total, data_c.isoformat(), lancar, USUARIO,
+                                    n_parc, venc.isoformat(), forma)
             else:
                 total = valor or qtd * (item["custo_unit"] or 0)
-                db.registrar_compra("insumo", item["id"], qtd, total, data_c.isoformat(), lancar, USUARIO)
-            salvo(f"Compra registrada: {unidade_fn(item, qtd)} ({brl(total)})")
+                db.registrar_compra("insumo", item["id"], qtd, total, data_c.isoformat(), lancar, USUARIO,
+                                    n_parc, venc.isoformat(), forma)
+            salvo(f"Compra registrada: {unidade_fn(item, qtd)} · {texto_parcelas(total, n_parc)}")
             st.rerun()
 
 
@@ -1068,7 +1090,7 @@ def pagina_estoque():
             st.caption("O estoque muda sozinho com compras, produção e pedidos entregues. "
                        "Para corrigir, use **⚖️ Pesei o rolo**.")
             edit = st.data_editor(
-                df, hide_index=True, use_container_width=True, key="fil_editor",
+                df, hide_index=True, use_container_width=True, key=f"fil_editor_{ev()}",
                 disabled=["R$/kg", "Em estoque (g)", "Rolos", "Situação"],
                 column_config={
                     "id": None,
@@ -1147,7 +1169,7 @@ def pagina_estoque():
                 else "🟢 OK",
                 "Ativo": bool(i["ativo"]), "Excluir?": False,
             } for i in insumos])
-            edit = st.data_editor(df, hide_index=True, use_container_width=True, key="ins_editor",
+            edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"ins_editor_{ev()}",
                                   disabled=["Em estoque", "Situação"],
                                   column_config={"id": None,
                                                  "Custo un.": st.column_config.NumberColumn(format=DINHEIRO)})
@@ -1227,8 +1249,54 @@ def pagina_estoque():
 # 💰 Financeiro
 # =====================================================================
 
+def campos_pagamento(key, forma_padrao="Cartão de crédito", colunas=True):
+    """Campos 'parcelas / 1o vencimento / forma' para usar dentro de um st.form."""
+    cols = st.columns(3) if colunas else [st.container(), st.container(), st.container()]
+    n = cols[0].number_input("Parcelas", min_value=1, max_value=48, step=1, value=1, key=f"{key}_parc",
+                             help="1 = à vista")
+    venc = cols[1].date_input("Vencimento da 1ª parcela", value=date.today(), format="DD/MM/YYYY",
+                              key=f"{key}_venc",
+                              help="No cartão: o vencimento da fatura em que cai a 1ª parcela. "
+                                   "À vista: o dia do pagamento.")
+    forma = cols[2].selectbox("Forma de pagamento", db.FORMAS_PAGAMENTO,
+                              index=db.FORMAS_PAGAMENTO.index(forma_padrao), key=f"{key}_forma")
+    return int(n), venc, forma
+
+
+def texto_parcelas(total, n):
+    if n <= 1:
+        return f"à vista ({brl(total)})"
+    base = round(total / n, 2)
+    ultima = round(total - base * (n - 1), 2)
+    return f"{n}x de {brl(base)}" + (f" (última {brl(ultima)})" if abs(ultima - base) >= 0.01 else "")
+
+
+def situacao_vencimento(data_iso, pago):
+    if pago:
+        return "✅ Pago"
+    venc = para_data(data_iso)
+    hoje = date.today()
+    if venc is None:
+        return "⏳ A pagar"
+    if venc < hoje:
+        return f"⚠️ Vencida há {(hoje - venc).days}d"
+    if venc == hoje:
+        return "🔔 Vence hoje"
+    return f"⏳ Vence em {(venc - hoje).days}d"
+
+
 def pagina_financeiro():
     titulo("💰 Financeiro")
+    tab_mes, tab_parc, tab_pagar = st.tabs(["📅 Movimento do mês", "💳 Compras parceladas", "📌 Contas a pagar"])
+    with tab_mes:
+        aba_movimento_mes()
+    with tab_parc:
+        aba_compras_parceladas()
+    with tab_pagar:
+        aba_contas_a_pagar()
+
+
+def aba_movimento_mes():
     c1, _ = st.columns([1, 3])
     with c1:
         mes = seletor_mes("fin_mes")
@@ -1236,14 +1304,18 @@ def pagina_financeiro():
     lancs = db.listar_lancamentos(ini, fim)
     entradas = sum(l["valor"] for l in lancs if l["tipo"] == "entrada")
     saidas = sum(l["valor"] for l in lancs if l["tipo"] == "saida")
+    em_parcelas = sum(l["valor"] for l in lancs if l["tipo"] == "saida" and l["parcelamento_id"])
+    falta_pagar = sum(l["valor"] for l in lancs if l["tipo"] == "saida" and not l["pago"])
     linha_cards([
         ("Entradas", brl(entradas), VERDE, mes_label(mes)),
-        ("Despesas", brl(saidas), VERMELHO, mes_label(mes)),
-        ("Resultado", brl(entradas - saidas), VERDE if entradas >= saidas else VERMELHO, "lucro/prejuízo do mês"),
-        ("Saldo em caixa", brl(db.saldo_caixa()), ROXO, "desde o início"),
+        ("Despesas", brl(saidas), VERMELHO,
+         f"{brl(em_parcelas)} em parcelas" if em_parcelas else mes_label(mes)),
+        ("Resultado", brl(entradas - saidas), VERDE if entradas >= saidas else VERMELHO, "entradas − despesas"),
+        ("Falta pagar no mês", brl(falta_pagar), AMBAR, "contas e parcelas em aberto"),
+        ("Saldo em caixa", brl(db.saldo_caixa()), ROXO, "só o que já entrou e já foi pago"),
     ])
 
-    with st.expander("➕ Novo lançamento", expanded=not lancs):
+    with st.expander("➕ Novo lançamento à vista", expanded=not lancs):
         tipo = st.radio("Tipo", ["Despesa (saída)", "Entrada"], horizontal=True, key="fin_tipo")
         eh_saida = tipo.startswith("Despesa")
         with st.form("form_lanc", clear_on_submit=True):
@@ -1251,89 +1323,116 @@ def pagina_financeiro():
             data_l = l1.date_input("Data", value=date.today(), format="DD/MM/YYYY")
             categoria = l2.selectbox("Categoria", db.CATEGORIAS_SAIDA if eh_saida else db.CATEGORIAS_ENTRADA)
             valor = l3.number_input("Valor (R$)", min_value=0.0, step=1.0)
-            l4, l5 = st.columns([2, 1])
+            l4, l5, l6 = st.columns([2, 1, 1])
             descricao = l4.text_input("Descrição", placeholder="Ex.: DAS do MEI, anúncio no Instagram...")
             forma = l5.selectbox("Forma de pagamento", db.FORMAS_PAGAMENTO)
+            with l6:
+                st.write("")
+                pago = st.checkbox("Já foi pago/recebido", value=True,
+                                   help="Desmarque para uma conta que ainda vai vencer (ela aparece em Contas a pagar).")
             if st.form_submit_button("Lançar", type="primary"):
                 if valor <= 0:
                     st.error("Informe um valor maior que zero.")
                 else:
                     db.inserir_lancamento(data_l.isoformat(), "saida" if eh_saida else "entrada", categoria,
-                                          descricao.strip(), valor, forma, USUARIO)
+                                          descricao.strip(), valor, forma, USUARIO, pago)
                     salvo("Lançamento registrado!")
                     st.rerun()
-        st.caption("💡 Vendas entram sozinhas quando você informa o valor recebido no pedido. "
-                   "Compras de filamento/insumo também, pela tela de Estoque.")
+        st.caption("💡 Comprou parcelado? Use a aba **💳 Compras parceladas**. Vendas entram sozinhas pelo "
+                   "valor recebido no pedido, e compras de filamento/insumo pela tela de Estoque.")
 
-    if lancs:
-        st.markdown(f"#### Lançamentos de {mes_label(mes)}")
-        todas_cat = list(dict.fromkeys(db.CATEGORIAS_SAIDA + db.CATEGORIAS_ENTRADA +
-                                       [l["categoria"] for l in lancs if l["categoria"]]))
-        df = pd.DataFrame([{
-            "id": l["id"], "Data": para_data(l["data"]),
-            "Tipo": "🟢 Entrada" if l["tipo"] == "entrada" else "🔴 Saída",
-            "Categoria": l["categoria"], "Descrição": l["descricao"], "Valor": l["valor"],
-            "Pagamento": l["forma_pagamento"] or "",
-            "Origem": f"Pedido #{l['pedido_id']}" if l["pedido_id"] else "Manual",
-            "Excluir?": False,
-        } for l in lancs])
-        edit = st.data_editor(
-            df, hide_index=True, use_container_width=True, key=f"fin_editor_{mes}", disabled=["Origem"],
-            column_config={
-                "id": None,
-                "Data": st.column_config.DateColumn(format="DD/MM/YYYY"),
-                "Tipo": st.column_config.SelectboxColumn(options=["🟢 Entrada", "🔴 Saída"]),
-                "Categoria": st.column_config.SelectboxColumn(options=todas_cat),
-                "Valor": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
-                "Pagamento": st.column_config.SelectboxColumn(options=db.FORMAS_PAGAMENTO),
-            })
-        if st.button("💾 Salvar lançamentos", type="primary", key="fin_salvar"):
-            ignorados = 0
-            for _, r in edit.iterrows():
-                rid = int(r["id"])
-                if r["Origem"] != "Manual":
-                    orig = next(l for l in lancs if l["id"] == rid)
-                    if _bool(r["Excluir?"]) or _num(r["Valor"]) != orig["valor"]:
-                        ignorados += 1
-                    continue
+    if not lancs:
+        st.info(f"Nenhum lançamento em {mes_label(mes)}.")
+        return
+
+    st.markdown(f"#### Lançamentos de {mes_label(mes)}")
+    todas_cat = list(dict.fromkeys(db.CATEGORIAS_SAIDA + db.CATEGORIAS_ENTRADA +
+                                   [l["categoria"] for l in lancs if l["categoria"]]))
+
+    def origem(l):
+        if l["pedido_id"]:
+            return f"Pedido #{l['pedido_id']}"
+        if l["parcelamento_id"]:
+            return f"Parcela {l['parcela_num']}/{l['parcela_total']}"
+        return "Manual"
+
+    df = pd.DataFrame([{
+        "id": l["id"], "Data": para_data(l["data"]),
+        "Tipo": "🟢 Entrada" if l["tipo"] == "entrada" else "🔴 Saída",
+        "Categoria": l["categoria"], "Descrição": l["descricao"], "Valor": l["valor"],
+        "Pagamento": l["forma_pagamento"] or "", "Pago": bool(l["pago"]), "Origem": origem(l),
+        "Excluir?": False,
+    } for l in lancs])
+    edit = st.data_editor(
+        df, hide_index=True, use_container_width=True, key=f"fin_editor_{mes}_{ev()}", disabled=["Origem"],
+        column_config={
+            "id": None,
+            "Data": st.column_config.DateColumn(format="DD/MM/YYYY"),
+            "Tipo": st.column_config.SelectboxColumn(options=["🟢 Entrada", "🔴 Saída"]),
+            "Categoria": st.column_config.SelectboxColumn(options=todas_cat),
+            "Valor": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
+            "Pagamento": st.column_config.SelectboxColumn(options=db.FORMAS_PAGAMENTO),
+            "Pago": st.column_config.CheckboxColumn(help="Desmarcado = ainda vai pagar/receber"),
+        })
+    st.caption("Parcelas: dá para mudar data, valor (ex.: juros) e marcar como paga aqui; para apagar, "
+               "exclua a compra inteira na aba 💳 Compras parceladas.")
+    if st.button("💾 Salvar lançamentos", type="primary", key="fin_salvar"):
+        ignorados = 0
+        por_id = {l["id"]: l for l in lancs}
+        for _, r in edit.iterrows():
+            rid = int(r["id"])
+            orig = por_id[rid]
+            d = r["Data"]
+            nova_data = orig["data"] if d is None or pd.isna(d) else pd.to_datetime(d).date().isoformat()
+            if orig["pedido_id"]:
+                # Recebimento de pedido: so muda pelo proprio pedido
+                if _bool(r["Excluir?"]) or _num(r["Valor"]) != orig["valor"]:
+                    ignorados += 1
+                continue
+            if orig["parcelamento_id"]:
                 if _bool(r["Excluir?"]):
-                    db.excluir_lancamento(rid)
-                    continue
-                d = r["Data"]
-                orig = next(l for l in lancs if l["id"] == rid)
-                db.atualizar_lancamento(rid, {
-                    "data": orig["data"] if d is None or pd.isna(d) else pd.to_datetime(d).date().isoformat(),
-                    "tipo": "entrada" if "Entrada" in _txt(r["Tipo"]) else "saida",
-                    "categoria": _txt(r["Categoria"]), "descricao": _txt(r["Descrição"]),
-                    "valor": abs(_num(r["Valor"])), "forma_pagamento": _txt(r["Pagamento"]),
-                })
-            if ignorados:
-                st.session_state["fin_aviso"] = (f"{ignorados} lançamento(s) de pedidos não foram alterados — "
-                                                 "mude o valor recebido direto no pedido.")
-            salvo("Lançamentos salvos!")
-            st.rerun()
-        if "fin_aviso" in st.session_state:
-            st.warning(st.session_state.pop("fin_aviso"))
+                    ignorados += 1
+                db.atualizar_lancamento(rid, {"data": nova_data, "valor": abs(_num(r["Valor"])),
+                                              "pago": 1 if _bool(r["Pago"]) else 0,
+                                              "forma_pagamento": _txt(r["Pagamento"])})
+                continue
+            if _bool(r["Excluir?"]):
+                db.excluir_lancamento(rid)
+                continue
+            db.atualizar_lancamento(rid, {
+                "data": nova_data,
+                "tipo": "entrada" if "Entrada" in _txt(r["Tipo"]) else "saida",
+                "categoria": _txt(r["Categoria"]), "descricao": _txt(r["Descrição"]),
+                "valor": abs(_num(r["Valor"])), "forma_pagamento": _txt(r["Pagamento"]),
+                "pago": 1 if _bool(r["Pago"]) else 0,
+            })
+        if ignorados:
+            st.session_state["fin_aviso"] = (f"{ignorados} alteração(ões) não foram feitas: recebimentos de pedidos "
+                                             "mudam pelo pedido, e parcelas são excluídas pela compra parcelada.")
+        salvo("Lançamentos salvos!")
+        st.rerun()
+    if "fin_aviso" in st.session_state:
+        st.warning(st.session_state.pop("fin_aviso"))
 
-        desp = {}
-        for l in lancs:
-            if l["tipo"] == "saida":
-                desp[l["categoria"] or "Outros"] = desp.get(l["categoria"] or "Outros", 0) + l["valor"]
-        g1, g2 = st.columns(2)
-        with g1:
-            st.markdown("#### 🧾 Despesas por categoria")
-            if desp:
-                itens = sorted(desp.items(), key=lambda x: x[1])
-                fig = go.Figure(go.Bar(x=[v for _, v in itens], y=[c for c, _ in itens], orientation="h",
-                                       marker_color=ROSA, text=[brl(v) for _, v in itens],
-                                       textposition="auto"))
-                fig.update_layout(xaxis_tickprefix="R$ ", showlegend=False)
-                st.plotly_chart(layout_grafico(fig, 300), key="graf_fin_cat")
-            else:
-                st.caption("Sem despesas neste mês.")
-        with g2:
-            st.markdown("#### 📈 Últimos 12 meses")
-            res = db.resumo_mensal(12)
+    desp = {}
+    for l in lancs:
+        if l["tipo"] == "saida":
+            desp[l["categoria"] or "Outros"] = desp.get(l["categoria"] or "Outros", 0) + l["valor"]
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown("#### 🧾 Despesas por categoria")
+        if desp:
+            itens = sorted(desp.items(), key=lambda x: x[1])
+            fig = go.Figure(go.Bar(x=[v for _, v in itens], y=[c for c, _ in itens], orientation="h",
+                                   marker_color=ROSA, text=[brl(v) for _, v in itens], textposition="auto"))
+            fig.update_layout(xaxis_tickprefix="R$ ", showlegend=False)
+            st.plotly_chart(layout_grafico(fig, 300), key="graf_fin_cat")
+        else:
+            st.caption("Sem despesas neste mês.")
+    with g2:
+        st.markdown("#### 📈 Últimos 12 meses")
+        res = db.resumo_mensal(12)
+        if res:
             dfr = pd.DataFrame(res)
             dfr["Mês"] = dfr["mes"].map(mes_label)
             fig = go.Figure()
@@ -1341,8 +1440,148 @@ def pagina_financeiro():
             fig.add_bar(x=dfr["Mês"], y=dfr["saidas"], name="Despesas", marker_color=VERMELHO)
             fig.update_layout(barmode="group", yaxis_tickprefix="R$ ")
             st.plotly_chart(layout_grafico(fig, 300), key="graf_fin_mensal")
+
+
+def aba_compras_parceladas():
+    compras = db.listar_parcelamentos()
+    ativas = [p for p in compras if p["proxima"]]
+    mes_atual = date.today().strftime("%Y-%m")
+    neste_mes = sum(l["valor"] for p in compras for l in p["parcelas"] if l["data"][:7] == mes_atual)
+    linha_cards([
+        ("Compras em andamento", str(len(ativas)), AZUL, f"{len(compras) - len(ativas)} já quitada(s)"),
+        ("Falta pagar", brl(sum(p["valor_restante"] for p in compras)), VERMELHO, "soma das parcelas em aberto"),
+        ("Parcelas deste mês", brl(neste_mes), ROSA, mes_label(mes_atual)),
+        ("Já pago", brl(sum(p["valor_pago"] for p in compras)), VERDE, "parcelas quitadas"),
+    ])
+
+    with st.expander("➕ Registrar compra parcelada", expanded=not compras):
+        st.caption("Ex.: a impressora em 10x no cartão. Cada parcela entra como despesa no mês em que vence, "
+                   "e as futuras ficam em **📌 Contas a pagar**.")
+        with st.form("form_parcelada", clear_on_submit=True):
+            f1, f2 = st.columns([2, 1])
+            descricao = f1.text_input("O que foi comprado *", placeholder="Ex.: Impressora Bambu A1")
+            fornecedor = f2.text_input("Loja / fornecedor", placeholder="Ex.: Mercado Livre")
+            f3, f4, f5 = st.columns(3)
+            categoria = f3.selectbox("Categoria", db.CATEGORIAS_SAIDA,
+                                     index=db.CATEGORIAS_SAIDA.index("Equipamentos"))
+            valor = f4.number_input("Valor total (R$)", min_value=0.0, step=10.0,
+                                    help="O total que vai pagar somando todas as parcelas (com juros, se tiver).")
+            data_compra = f5.date_input("Data da compra", value=date.today(), format="DD/MM/YYYY")
+            n, venc, forma = campos_pagamento("parc_fin")
+            if st.form_submit_button("Registrar compra", type="primary"):
+                if not descricao.strip() or valor <= 0:
+                    st.error("Preencha o que foi comprado e o valor total.")
+                else:
+                    db.registrar_despesa(descricao.strip(), categoria, valor, n, venc.isoformat(),
+                                         data_compra.isoformat(), forma, fornecedor.strip(), USUARIO)
+                    salvo(f"{descricao.strip()}: {texto_parcelas(valor, n)}")
+                    st.rerun()
+
+    if not compras:
+        st.info("Nenhuma compra parcelada registrada.")
+        return
+
+    so_ativas = st.toggle("Mostrar só as que ainda têm parcelas", value=True, key="parc_so_ativas")
+    lista = ativas if so_ativas else compras
+    if lista:
+        st.dataframe(pd.DataFrame([{
+            "Compra": p["descricao"], "Loja": p["fornecedor"] or "", "Categoria": p["categoria"],
+            "Data": fmt_data(p["data_compra"]), "Total": p["valor_total"],
+            "Parcelas": f"{p['pagas']}/{p['n_parcelas']} pagas",
+            "Progresso": 100 * p["pagas"] / p["n_parcelas"] if p["n_parcelas"] else 100.0,
+            "Falta pagar": p["valor_restante"],
+            "Próxima": (f"{fmt_data(p['proxima']['data'])} · {brl(p['proxima']['valor'])}"
+                        if p["proxima"] else "✅ Quitada"),
+            "Forma": p["forma_pagamento"] or "",
+        } for p in lista]), hide_index=True, use_container_width=True, column_config={
+            "Total": st.column_config.NumberColumn(format=DINHEIRO),
+            "Falta pagar": st.column_config.NumberColumn(format=DINHEIRO),
+            "Progresso": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f%%"),
+        })
     else:
-        st.info(f"Nenhum lançamento em {mes_label(mes)}.")
+        st.success("Todas as compras parceladas estão quitadas! 🎉")
+
+    st.markdown("#### 🔎 Parcelas de uma compra")
+    opts = {f"#{p['id']} {p['descricao']} — {texto_parcelas(p['valor_total'], p['n_parcelas'])}": p
+            for p in compras}
+    sel = st.selectbox("Compra", list(opts), key="parc_sel")
+    p = opts[sel]
+    df = pd.DataFrame([{
+        "id": l["id"], "Parcela": f"{l['parcela_num']}/{l['parcela_total']}", "Vencimento": para_data(l["data"]),
+        "Valor": l["valor"], "Pago": bool(l["pago"]), "Situação": situacao_vencimento(l["data"], l["pago"]),
+    } for l in p["parcelas"]])
+    edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"parc_editor_{p['id']}_{ev()}",
+                          disabled=["Parcela", "Situação"],
+                          column_config={"id": None,
+                                         "Vencimento": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                                         "Valor": st.column_config.NumberColumn(format=DINHEIRO, min_value=0)})
+    b1, b2 = st.columns([1, 3])
+    if b1.button("💾 Salvar parcelas", type="primary", key=f"parc_salvar_{p['id']}"):
+        orig = {l["id"]: l for l in p["parcelas"]}
+        for _, r in edit.iterrows():
+            rid = int(r["id"])
+            d = r["Vencimento"]
+            db.atualizar_lancamento(rid, {
+                "data": orig[rid]["data"] if d is None or pd.isna(d) else pd.to_datetime(d).date().isoformat(),
+                "valor": abs(_num(r["Valor"])), "pago": 1 if _bool(r["Pago"]) else 0})
+        salvo("Parcelas salvas!")
+        st.rerun()
+    with b2.expander("🗑️ Excluir esta compra"):
+        st.caption("Apaga a compra e todas as parcelas dela do Financeiro (inclusive as já pagas). "
+                   "Use se lançou errado.")
+        conf = st.checkbox("Sim, excluir a compra e as parcelas", key=f"parc_del_conf_{p['id']}")
+        if st.button("Excluir compra", disabled=not conf, key=f"parc_del_{p['id']}"):
+            db.excluir_parcelamento(p["id"])
+            salvo("Compra parcelada excluída")
+            st.rerun()
+
+
+def aba_contas_a_pagar():
+    contas = db.contas_a_pagar()
+    hoje = date.today()
+    vencidas = [l for l in contas if para_data(l["data"]) and para_data(l["data"]) <= hoje]
+    prox30 = [l for l in contas if para_data(l["data"]) and hoje < para_data(l["data"]) <= hoje + timedelta(days=30)]
+    linha_cards([
+        ("Vencidas / vencem hoje", brl(sum(l["valor"] for l in vencidas)), VERMELHO, f"{len(vencidas)} conta(s)"),
+        ("Próximos 30 dias", brl(sum(l["valor"] for l in prox30)), AMBAR, f"{len(prox30)} conta(s)"),
+        ("Total a pagar", brl(sum(l["valor"] for l in contas)), AZUL, "inclui parcelas futuras"),
+    ])
+    if not contas:
+        st.success("Nenhuma conta em aberto. 🎉")
+        return
+
+    if vencidas:
+        st.caption("Pagou no cartão ou débito automático? Marque de uma vez as que já venceram:")
+        if st.button(f"✅ Marcar as {len(vencidas)} vencida(s) como pagas", key="pagar_vencidas"):
+            n = db.marcar_vencidas_pagas()
+            salvo(f"{n} conta(s) marcada(s) como paga(s)")
+            st.rerun()
+
+    st.markdown("#### 📋 Em aberto")
+    df = pd.DataFrame([{
+        "id": l["id"], "Vencimento": fmt_data(l["data"]), "Situação": situacao_vencimento(l["data"], False),
+        "Descrição": l["descricao"], "Categoria": l["categoria"], "Valor": l["valor"],
+        "Forma": l["forma_pagamento"] or "", "Pago": False,
+    } for l in contas])
+    edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"pagar_editor_{ev()}",
+                          disabled=["Vencimento", "Situação", "Descrição", "Categoria", "Valor", "Forma"],
+                          column_config={"id": None, "Valor": st.column_config.NumberColumn(format=DINHEIRO),
+                                         "Pago": st.column_config.CheckboxColumn(help="Marque o que já pagou")})
+    if st.button("💾 Salvar pagamentos", type="primary", key="pagar_salvar"):
+        ids = [int(r["id"]) for _, r in edit.iterrows() if _bool(r["Pago"])]
+        if ids:
+            db.marcar_pago(ids)
+            salvo(f"{len(ids)} conta(s) paga(s)!")
+        st.rerun()
+
+    st.markdown("#### 📆 Compromissos por mês")
+    proj = db.projecao_a_pagar()
+    dfp = pd.DataFrame(proj)
+    dfp["Mês"] = dfp["mes"].map(mes_label)
+    fig = go.Figure(go.Bar(x=dfp["Mês"], y=dfp["valor"], marker_color=LARANJA,
+                           text=[brl(v) for v in dfp["valor"]], textposition="auto"))
+    fig.update_layout(yaxis_tickprefix="R$ ", showlegend=False)
+    st.plotly_chart(layout_grafico(fig, 300), key="graf_a_pagar")
 
 
 # =====================================================================
@@ -1393,13 +1632,26 @@ def pagina_config():
             valor = i3.number_input("Quanto pagaram (R$)", min_value=0.0, step=100.0)
             vida = i4.number_input("Vida útil estimada (horas)", min_value=1.0, step=500.0, value=5000.0,
                                    help="Usado para dividir o valor da máquina entre as peças (desgaste).")
+            st.markdown("**Pagamento da impressora**")
+            i5, i6 = st.columns(2)
+            data_compra = i5.date_input("Data da compra", value=date.today(), format="DD/MM/YYYY", key="imp_data")
+            with i6:
+                st.write("")
+                lancar = st.checkbox("Lançar a compra no Financeiro", value=True, key="imp_lancar",
+                                     help="Desmarque se já registrou em Financeiro → Compras parceladas.")
+            n_parc, venc, forma = campos_pagamento("imp")
             if st.form_submit_button("Cadastrar", type="primary"):
                 if not nome.strip():
                     st.error("Informe o nome.")
                 else:
                     db.inserir("impressoras", {"nome": nome.strip(), "potencia_w": pot, "valor_compra": valor,
                                                "vida_util_horas": vida, "ativa": 1})
-                    salvo("Impressora cadastrada!")
+                    msg = "Impressora cadastrada!"
+                    if lancar and valor > 0:
+                        db.registrar_despesa(f"Impressora {nome.strip()}", "Equipamentos", valor, n_parc,
+                                             venc.isoformat(), data_compra.isoformat(), forma, usuario=USUARIO)
+                        msg = f"Impressora cadastrada · compra lançada: {texto_parcelas(valor, n_parc)}"
+                    salvo(msg)
                     st.rerun()
     imps = db.listar("impressoras")
     if imps:
@@ -1409,7 +1661,7 @@ def pagina_config():
             "Desgaste por hora": (i["valor_compra"] or 0) / (i["vida_util_horas"] or 5000),
             "Ativa": bool(i["ativa"]), "Excluir?": False,
         } for i in imps])
-        edit = st.data_editor(df, hide_index=True, use_container_width=True, key="imp_editor",
+        edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"imp_editor_{ev()}",
                               disabled=["Desgaste por hora"],
                               column_config={"id": None,
                                              "Valor pago": st.column_config.NumberColumn(format=DINHEIRO),

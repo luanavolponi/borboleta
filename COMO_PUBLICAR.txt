@@ -92,3 +92,8 @@ COMO O APP FUNCIONA SOZINHO
   Financeiro (dá pra desmarcar).
 - "Registrar produção" -> desconta filamento e soma peças
   prontas.
+- Compra parcelada (Financeiro > Compras parceladas, compra
+  de filamento/insumo no Estoque, ou cadastro de impressora)
+  -> cada parcela vira uma despesa no mês em que vence. As que
+  ainda vão vencer ficam em "Contas a pagar"; o "Saldo em
+  caixa" só desconta o que já foi pago.
