@@ -164,7 +164,8 @@ if not check_password():
 
 
 # --- Sync: puxa dados mais recentes do GitHub (na nuvem) ---
-from sync import pull_database, push_database, is_cloud, test_sync, get_last_sync_status  # noqa: E402
+from sync import (pull_database, push_database, is_cloud, test_sync, get_last_sync_status,  # noqa: E402
+                  importar_pendentes)
 
 if is_cloud() and "db_pulled" not in st.session_state:
     pull_database()
@@ -172,6 +173,14 @@ if is_cloud() and "db_pulled" not in st.session_state:
 
 db.init_db()
 USUARIO = st.session_state.get("username", "")
+
+# --- Cargas de dados deixadas no repositorio de dados (importar/*.json), uma vez por sessao ---
+if is_cloud() and "importacao_feita" not in st.session_state:
+    st.session_state.importacao_feita = True
+    try:
+        st.session_state["importacao_msgs"] = importar_pendentes(db.aplicar_importacao)
+    except Exception as _e:
+        print(f"[IMPORTACAO] erro: {_e}", flush=True)
 
 if "acesso_logado" not in st.session_state:
     st.session_state.acesso_logado = True
@@ -1705,6 +1714,9 @@ def pagina_config():
 # =====================================================================
 # Roteamento
 # =====================================================================
+
+for _msg in st.session_state.pop("importacao_msgs", None) or []:
+    (st.error if _msg.startswith("Erro") else st.success)(f"📥 {_msg}")
 
 {
     PG_INICIO: pagina_inicio,

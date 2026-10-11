@@ -166,6 +166,11 @@ def init_db():
             forma_pagamento TEXT DEFAULT '',
             criado_por TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS importacoes (
+            id TEXT PRIMARY KEY,
+            quando TEXT,
+            resumo TEXT
+        );
         CREATE TABLE IF NOT EXISTS acessos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT,
@@ -705,3 +710,63 @@ def exportar_tabelas():
              "impressoras", "lancamentos", "compras_parceladas", "movimentos", "config"]
     with _conn() as c:
         return {n: _rows(c.execute(f"SELECT * FROM {n}")) for n in nomes}
+
+
+# ---------------------------------------------------------------- importacao (carga de dados)
+
+def aplicar_importacao(dados, usuario="Importação"):
+    """Aplica uma carga {id, despesas, filamentos, insumos} uma unica vez.
+
+    Pula o que ja existir (filamento com mesmo material/cor/marca, insumo com mesmo nome,
+    despesa com mesma descricao e valor) para nao duplicar o que foi lancado a mao.
+    Retorna um resumo em texto, ou None se essa carga ja tinha sido aplicada.
+    """
+    with _conn() as c:
+        if c.execute("SELECT 1 FROM importacoes WHERE id=?", (dados["id"],)).fetchone():
+            return None
+        n_desp = n_fil = n_ins = pulados = 0
+
+        for d in dados.get("despesas", []):
+            ja = c.execute("""SELECT 1 FROM compras_parceladas WHERE descricao=? AND ABS(valor_total-?)<0.01
+                              UNION SELECT 1 FROM lancamentos WHERE descricao=? AND ABS(valor-?)<0.01""",
+                           (d["descricao"], d["valor_total"], d["descricao"], d["valor_total"])).fetchone()
+            if ja:
+                pulados += 1
+                continue
+            _lancar_despesa(c, d["descricao"], d["categoria"], d["valor_total"], d.get("n_parcelas", 1),
+                            d["primeiro_vencimento"], d["data_compra"], d.get("forma_pagamento", ""),
+                            d.get("fornecedor", ""), usuario)
+            n_desp += 1
+
+        for f in dados.get("filamentos", []):
+            ja = c.execute("""SELECT 1 FROM filamentos WHERE lower(material)=lower(?) AND lower(cor)=lower(?)
+                              AND lower(COALESCE(marca,''))=lower(?)""",
+                           (f["material"], f["cor"], f.get("marca", ""))).fetchone()
+            if ja:
+                pulados += 1
+                continue
+            peso = f.get("peso_rolo_g", 1000)
+            cur = c.execute("""INSERT INTO filamentos(material, cor, marca, preco_rolo, peso_rolo_g, estoque_g,
+                               estoque_minimo_g, obs, ativo) VALUES (?,?,?,?,?,0,?,?,1)""",
+                            (f["material"], f["cor"], f.get("marca", ""), f.get("preco_rolo", 0), peso,
+                             f.get("estoque_minimo_g", 300), f.get("obs", "")))
+            if f.get("rolos", 0) > 0:
+                _mover(c, "filamento", cur.lastrowid, f["rolos"] * peso, "Estoque inicial (importação)")
+            n_fil += 1
+
+        for i in dados.get("insumos", []):
+            if c.execute("SELECT 1 FROM insumos WHERE lower(nome)=lower(?)", (i["nome"],)).fetchone():
+                pulados += 1
+                continue
+            cur = c.execute("""INSERT INTO insumos(nome, unidade, custo_unit, estoque, estoque_minimo, ativo)
+                               VALUES (?,?,?,0,?,1)""",
+                            (i["nome"], i.get("unidade", "un"), i.get("custo_unit", 0), i.get("estoque_minimo", 0)))
+            if i.get("quantidade", 0) > 0:
+                _mover(c, "insumo", cur.lastrowid, i["quantidade"], "Estoque inicial (importação)")
+            n_ins += 1
+
+        resumo = (f"Importado: {n_desp} compra(s) no Financeiro, {n_fil} filamento(s) e {n_ins} insumo(s)"
+                  + (f" · {pulados} item(ns) já existiam e foram pulados" if pulados else ""))
+        c.execute("INSERT INTO importacoes(id, quando, resumo) VALUES (?,?,?)",
+                  (dados["id"], datetime.now().strftime("%Y-%m-%d %H:%M"), resumo))
+        return resumo

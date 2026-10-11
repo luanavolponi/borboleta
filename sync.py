@@ -144,6 +144,13 @@ def pull_database():
     status, data = _github_api("GET", url, token)
 
     if status == 404:
+        # 404 tambem acontece quando o token NAO enxerga o repositorio: conferir antes de liberar o push
+        st_repo, _ = _github_api("GET", f"https://api.github.com/repos/{owner}/{repo}", token)
+        if st_repo != 200:
+            _log(f"Token sem acesso ao repositorio {owner}/{repo} (status {st_repo})")
+            _set_status(False, f"O token nao tem acesso ao repositorio {owner}/{repo}",
+                        "Gere um token com acesso a esse repositorio e troque o github_token nos Secrets.")
+            return False
         _log("Banco ainda nao existe na nuvem (primeiro uso)")
         _set_status(True, "Primeiro uso: banco sera criado na nuvem")
         _estado["push_liberado"] = True
@@ -323,3 +330,45 @@ def is_cloud():
     }
     in_cloud = any(indicators.values())
     return in_cloud
+
+
+IMPORT_DIR = "importar"
+
+
+def importar_pendentes(aplicar):
+    """Aplica cargas de dados deixadas em importar/*.json no repositorio de DADOS (privado).
+
+    `aplicar(dados)` grava no banco local e devolve um resumo (ou None se ja tinha sido
+    importado). Depois de salvar o banco na nuvem, apaga os arquivos aplicados.
+    Retorna a lista de resumos.
+    """
+    token, owner, repo = _get_config()
+    if not token or not _estado["push_liberado"]:
+        return []
+    base = f"https://api.github.com/repos/{owner}/{repo}/contents/{IMPORT_DIR}"
+    status, itens = _github_api("GET", f"{base}?ref=main", token)
+    if status != 200 or not isinstance(itens, list):
+        return []
+    aplicados, resumos = [], []
+    for item in itens:
+        if not item.get("name", "").endswith(".json"):
+            continue
+        st_arq, arq = _github_api("GET", item["url"], token)
+        if st_arq != 200:
+            continue
+        try:
+            dados = json.loads(base64.b64decode(arq.get("content", "").replace("\n", "")).decode("utf-8"))
+            resumo = aplicar(dados)
+        except Exception as e:
+            _log(f"Importacao {item['name']} falhou: {e}")
+            resumos.append(f"Erro ao importar {item['name']}: {e}")
+            continue
+        aplicados.append(item)
+        if resumo:
+            resumos.append(resumo)
+    if aplicados and push_database():
+        for item in aplicados:
+            _github_api("DELETE", f"{base}/{item['name']}", token,
+                        {"message": f"Importado pelo app: {item['name']}", "sha": item["sha"], "branch": "main"})
+            _log(f"Importado e removido: {item['name']}")
+    return resumos
