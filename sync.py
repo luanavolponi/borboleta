@@ -372,3 +372,48 @@ def importar_pendentes(aplicar):
                         {"message": f"Importado pelo app: {item['name']}", "sha": item["sha"], "branch": "main"})
             _log(f"Importado e removido: {item['name']}")
     return resumos
+
+
+def diagnostico():
+    """Checklist da conexao com o repositorio de dados: lista de (ok, texto). Nunca mostra o token."""
+    itens = []
+    try:
+        chaves = list(st.secrets.keys())
+    except Exception:
+        chaves = []
+    for chave, nome in (("github_token", "Token do GitHub (github_token)"),
+                        ("github_repo", "Repositório de dados (github_repo)"),
+                        ("passwords", "Senhas ([passwords])")):
+        itens.append((chave in chaves, f"{nome} {'configurado' if chave in chaves else 'FALTANDO'} nos Secrets"))
+
+    token, owner, repo = _get_config()
+    if not token:
+        itens.append((False, "Sem token/repositório válidos nos Secrets — confira os nomes e as aspas"))
+        return itens
+
+    status, data = _github_api("GET", f"https://api.github.com/repos/{owner}/{repo}", token)
+    if status == 200:
+        itens.append((True, f"O token enxerga o repositório {owner}/{repo}"))
+        pode = (data.get("permissions") or {}).get("push")
+        itens.append((bool(pode), "O token pode gravar no repositório" if pode
+                      else "O token NÃO tem permissão de gravar (precisa do escopo 'repo')"))
+    elif status == 401:
+        itens.append((False, "Token inválido ou expirado (erro 401) — gere um novo e troque nos Secrets"))
+        return itens
+    else:
+        itens.append((False, f"O token não enxerga {owner}/{repo} (erro {status}) — nome do repositório errado "
+                             "ou token sem acesso a ele"))
+        return itens
+
+    st_db, _ = _github_api("GET", f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main",
+                           token)
+    itens.append((st_db in (200, 404), "Banco de dados já existe na nuvem" if st_db == 200
+                  else ("Banco ainda não foi criado na nuvem (nada foi salvo até agora)" if st_db == 404
+                        else f"Erro ao procurar o banco na nuvem ({st_db})")))
+    st_imp, arqs = _github_api("GET", f"https://api.github.com/repos/{owner}/{repo}/contents/{IMPORT_DIR}?ref=main",
+                               token)
+    n = len([a for a in arqs if a.get("name", "").endswith(".json")]) if st_imp == 200 and isinstance(arqs, list) else 0
+    itens.append((True, f"{n} carga(s) de dados esperando importação" if n else "Nenhuma carga esperando importação"))
+    itens.append((_estado["push_liberado"], "Salvamento na nuvem liberado nesta sessão" if _estado["push_liberado"]
+                  else "Salvamento na nuvem BLOQUEADO nesta sessão (os dados da nuvem não carregaram)"))
+    return itens

@@ -25,6 +25,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
+VERSAO = "1.6 · 11/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -155,7 +156,8 @@ def check_password():
                 print(f"[ACESSO] FALHA login usuario='{usuario_lower}'", flush=True)
                 st.error("Usuário ou senha incorretos.")
 
-    st.markdown('<div class="login-rodape">🔒 Acesso restrito a Luana e Tayrone</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="login-rodape">🔒 Acesso restrito a Luana e Tayrone<br>versão {VERSAO}</div>',
+                unsafe_allow_html=True)
     return False
 
 
@@ -165,7 +167,7 @@ if not check_password():
 
 # --- Sync: puxa dados mais recentes do GitHub (na nuvem) ---
 from sync import (pull_database, push_database, is_cloud, test_sync, get_last_sync_status,  # noqa: E402
-                  importar_pendentes)
+                  importar_pendentes, diagnostico)
 
 if is_cloud() and "db_pulled" not in st.session_state:
     pull_database()
@@ -383,6 +385,7 @@ with st.sidebar:
     if is_cloud() and get_last_sync_status().get("ok") is False:
         st.error(f"☁️ {get_last_sync_status().get('msg')}")
     st.caption(f"Olá, {USUARIO}! · {SLOGAN}")
+    st.caption(f"versão {VERSAO}")
     if st.button("Sair", key="logout", use_container_width=True):
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
@@ -1744,6 +1747,16 @@ def pagina_config():
                 st.success(f"Última sincronização: {status.get('msg')}")
             elif status.get("ok") is False:
                 st.error(f"Sync falhou: {status.get('msg')}")
+            if st.button("🔍 Diagnosticar conexão", key="diag"):
+                for ok, texto in diagnostico():
+                    st.markdown(f"{'✅' if ok else '❌'} {texto}")
+            if st.button("🔄 Recarregar da nuvem e importar cargas", key="reimportar",
+                         help="Puxa os dados da nuvem de novo e aplica as cargas que estiverem esperando."):
+                pull_database()
+                db.init_db()
+                msgs = importar_pendentes(db.aplicar_importacao)
+                st.session_state["importacao_msgs"] = msgs or ["Nenhuma carga nova foi importada."]
+                st.rerun()
             if st.button("Forçar salvar na nuvem agora"):
                 salvo("Dados enviados para a nuvem!")
 
