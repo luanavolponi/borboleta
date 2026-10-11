@@ -751,7 +751,7 @@ def exportar_tabelas():
 # ---------------------------------------------------------------- importacao (carga de dados)
 
 def aplicar_importacao(dados, usuario="Importação"):
-    """Aplica uma carga {id, despesas, filamentos, insumos} uma unica vez.
+    """Aplica uma carga {id, despesas, filamentos, insumos, impressoras} uma unica vez.
 
     Pula o que ja existir (filamento com mesmo material/cor/marca, insumo com mesmo nome,
     despesa com mesma descricao e valor) para nao duplicar o que foi lancado a mao.
@@ -760,7 +760,7 @@ def aplicar_importacao(dados, usuario="Importação"):
     with _conn() as c:
         if c.execute("SELECT 1 FROM importacoes WHERE id=?", (dados["id"],)).fetchone():
             return None
-        n_desp = n_fil = n_ins = pulados = 0
+        n_desp = n_fil = n_ins = n_imp = pulados = 0
 
         for d in dados.get("despesas", []):
             ja = c.execute("""SELECT 1 FROM compras_parceladas WHERE descricao=? AND ABS(valor_total-?)<0.01
@@ -802,7 +802,17 @@ def aplicar_importacao(dados, usuario="Importação"):
                 _mover(c, "insumo", cur.lastrowid, i["quantidade"], "Estoque inicial (importação)")
             n_ins += 1
 
-        resumo = (f"Importado: {n_desp} compra(s) no Financeiro, {n_fil} filamento(s) e {n_ins} insumo(s)"
+        for m in dados.get("impressoras", []):
+            if c.execute("SELECT 1 FROM impressoras WHERE lower(nome)=lower(?)", (m["nome"],)).fetchone():
+                pulados += 1
+                continue
+            c.execute("""INSERT INTO impressoras(nome, potencia_w, valor_compra, vida_util_horas, ativa)
+                         VALUES (?,?,?,?,1)""",
+                      (m["nome"], m.get("potencia_w", 150), m.get("valor_compra", 0), m.get("vida_util_horas", 5000)))
+            n_imp += 1
+
+        resumo = (f"Importado: {n_desp} compra(s) no Financeiro, {n_fil} filamento(s), {n_ins} insumo(s)"
+                  f" e {n_imp} impressora(s)"
                   + (f" · {pulados} item(ns) já existiam e foram pulados" if pulados else ""))
         c.execute("INSERT INTO importacoes(id, quando, resumo) VALUES (?,?,?)",
                   (dados["id"], datetime.now().strftime("%Y-%m-%d %H:%M"), resumo))
