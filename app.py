@@ -847,19 +847,28 @@ def pagina_produtos():
     titulo("🏷️ Produtos & Preços")
     tab_calc, tab_cat = st.tabs(["🧮 Calculadora de preço", "📚 Catálogo de produtos"])
     cfg = db.get_config()
+    medias = db.medias_filamento(cfg)
     fils = opcoes_filamentos()
     imps = opcoes_impressoras()
 
+    def rotulo_tipo(t):
+        m = medias[t]
+        origem = "valor fixo" if m["fixo"] else f"média de {m['qtd']} filamento(s)"
+        return f"{t} · {brl(m['preco_kg'])}/kg ({origem})"
+
     with tab_calc:
-        if not fils:
-            st.warning("Cadastre seus filamentos em **📦 Estoque** para o custo do material entrar no cálculo.")
+        if not medias["Simples"]["preco_kg"]:
+            st.warning("Cadastre seus filamentos em **📦 Estoque** (com o preço do rolo) para o custo do material "
+                       "entrar no cálculo.")
         if not imps:
             st.caption("💡 Cadastre sua impressora em **⚙️ Configurações** para incluir o desgaste da máquina "
                        "(sem ela, a energia é calculada com 150 W).")
         col_in, col_out = st.columns([1, 1], gap="large")
         with col_in:
             st.markdown("##### Dados da peça")
-            fil_label = st.selectbox("Filamento", list(fils) or ["—"], key="calc_fil")
+            tipo_fil = st.radio("Filamento", db.TIPOS_FILAMENTO, format_func=rotulo_tipo, key="calc_tipo",
+                                help="O custo usa o preço MÉDIO por kg do tipo. Marque cada filamento como "
+                                     "Simples ou Especial em 📦 Estoque; dá para fixar os valores em ⚙️ Configurações.")
             imp_label = st.selectbox("Impressora", list(imps) or ["Padrão (150 W)"], key="calc_imp")
             gramas = st.number_input("Peso da peça (g) — o fatiador mostra", min_value=0.0, step=1.0, key="calc_g")
             h1, h2 = st.columns(2)
@@ -876,10 +885,10 @@ def pagina_produtos():
                                    value=float(cfg["taxa_venda"]), key="calc_taxa",
                                    help="Maquininha, Shopee, Elo7... o preço já embute essa taxa.")
 
-        fil = fils.get(fil_label)
         imp = imps.get(imp_label)
         horas_total = horas + minutos / 60
-        custo = db.calcular_custo(gramas, horas_total, min_trab, extra, fil, imp, cfg)
+        custo = db.calcular_custo(gramas, horas_total, min_trab, extra, None, imp, cfg,
+                                  tipo_filamento=tipo_fil, medias=medias)
         preco = db.preco_sugerido(custo["total"], margem, taxa)
         preco_r = arredondar_preco(preco)
         lucro = preco_r * (1 - taxa / 100) - custo["total"]
@@ -907,12 +916,17 @@ def pagina_produtos():
                 n3, n4 = st.columns(2)
                 preco_final = n3.number_input("Preço de venda (R$)", min_value=0.0, step=0.5, value=float(preco_r))
                 est_min = n4.number_input("Estoque mínimo de peças prontas", min_value=0, step=1, value=0)
+                fil_baixa = st.selectbox("Filamento usado (para dar baixa no estoque ao produzir)",
+                                         ["— nenhum —"] + [k for k, f in fils.items()
+                                                           if (f.get("tipo") or "Simples") == tipo_fil],
+                                         help="Opcional. Não muda o custo, que usa a média do tipo.")
                 if st.form_submit_button("Salvar produto", type="primary"):
                     if not nome.strip():
                         st.error("Dê um nome ao produto.")
                     else:
+                        fil = fils.get(fil_baixa)
                         db.inserir("produtos", {
-                            "nome": nome.strip(), "categoria": categoria.strip(),
+                            "nome": nome.strip(), "categoria": categoria.strip(), "tipo_filamento": tipo_fil,
                             "filamento_id": fil["id"] if fil else None, "impressora_id": imp["id"] if imp else None,
                             "gramas": gramas, "horas_impressao": horas_total, "minutos_trabalho": min_trab,
                             "custo_extra": extra, "margem_pct": margem, "preco_venda": preco_final,
@@ -933,10 +947,12 @@ def pagina_produtos():
             produtos = [p for p in produtos if p["ativo"]]
         linhas = []
         for p in produtos:
-            c = db.custo_produto(p, cfg)["total"]
+            c = db.custo_produto(p, cfg, medias)["total"]
+            fil_p = fils_todos.get(rotulo_por_id(fils_todos, p["filamento_id"]) or "") or {}
             mg = p["margem_pct"] if p["margem_pct"] is not None else cfg["margem_padrao"]
             linhas.append({
                 "id": p["id"], "Produto": p["nome"], "Categoria": p["categoria"] or "",
+                "Tipo": p["tipo_filamento"] or fil_p.get("tipo") or "Simples",
                 "Filamento": rotulo_por_id(fils_todos, p["filamento_id"]),
                 "Impressora": rotulo_por_id(imps_todas, p["impressora_id"]),
                 "Gramas": p["gramas"] or 0.0, "Horas": p["horas_impressao"] or 0.0,
@@ -954,7 +970,10 @@ def pagina_produtos():
             disabled=["Custo", "Sugerido", "Lucro/peça", "Prontas"],
             column_config={
                 "id": None,
-                "Filamento": st.column_config.SelectboxColumn(options=list(fils_todos)),
+                "Tipo": st.column_config.SelectboxColumn(options=db.TIPOS_FILAMENTO, required=True,
+                                                         help="Define o preço médio do filamento no custo"),
+                "Filamento": st.column_config.SelectboxColumn(options=list(fils_todos),
+                                                              help="Opcional: rolo que sai do estoque ao produzir"),
                 "Impressora": st.column_config.SelectboxColumn(options=list(imps_todas)),
                 "Gramas": st.column_config.NumberColumn(format="%.0f g", min_value=0),
                 "Horas": st.column_config.NumberColumn(format="%.2f h", min_value=0),
@@ -971,6 +990,7 @@ def pagina_produtos():
                 f = fils_todos.get(_txt(r["Filamento"]))
                 i = imps_todas.get(_txt(r["Impressora"]))
                 return {"nome": _txt(r["Produto"]) or "Sem nome", "categoria": _txt(r["Categoria"]),
+                        "tipo_filamento": _txt(r["Tipo"]) or "Simples",
                         "filamento_id": f["id"] if f else None, "impressora_id": i["id"] if i else None,
                         "gramas": _num(r["Gramas"]), "horas_impressao": _num(r["Horas"]),
                         "minutos_trabalho": _num(r["Min. trabalho"]), "custo_extra": _num(r["Extras"]),
@@ -1042,6 +1062,9 @@ def pagina_estoque():
             with st.expander("➕ Cadastrar filamento"):
                 with st.form("form_novo_fil", clear_on_submit=True):
                     material = st.selectbox("Material", db.MATERIAIS)
+                    tipo_novo = st.selectbox("Tipo", db.TIPOS_FILAMENTO,
+                                             help="Simples ou Especial (silk, velvet, glitter...). Define o preço "
+                                                  "médio por kg usado no custo das peças.")
                     cor = st.text_input("Cor *", placeholder="Ex.: Lilás, Branco, Rosa bebê")
                     marca = st.text_input("Marca", placeholder="Ex.: Voolt3D, 3D Lab, Bambu")
                     preco_rolo = st.number_input("Preço do rolo (R$)", min_value=0.0, step=1.0)
@@ -1054,6 +1077,7 @@ def pagina_estoque():
                         else:
                             fid = db.inserir("filamentos", {
                                 "material": material, "cor": cor.strip(), "marca": marca.strip(),
+                                "tipo": tipo_novo,
                                 "preco_rolo": preco_rolo, "peso_rolo_g": peso_rolo, "estoque_g": 0,
                                 "estoque_minimo_g": minimo, "ativo": 1})
                             if est_ini > 0:
@@ -1087,7 +1111,8 @@ def pagina_estoque():
 
         if fils:
             df = pd.DataFrame([{
-                "id": f["id"], "Material": f["material"], "Cor": f["cor"], "Marca": f["marca"] or "",
+                "id": f["id"], "Material": f["material"], "Tipo": f.get("tipo") or "Simples",
+                "Cor": f["cor"], "Marca": f["marca"] or "",
                 "Preço rolo": f["preco_rolo"] or 0.0, "Peso rolo (g)": f["peso_rolo_g"] or 1000.0,
                 "R$/kg": (f["preco_rolo"] or 0) / (f["peso_rolo_g"] or 1000) * 1000,
                 "Em estoque (g)": f["estoque_g"] or 0.0,
@@ -1104,6 +1129,7 @@ def pagina_estoque():
                 column_config={
                     "id": None,
                     "Material": st.column_config.SelectboxColumn(options=db.MATERIAIS),
+                    "Tipo": st.column_config.SelectboxColumn(options=db.TIPOS_FILAMENTO, required=True),
                     "Preço rolo": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
                     "R$/kg": st.column_config.NumberColumn(format=DINHEIRO),
                     "Peso rolo (g)": st.column_config.NumberColumn(format="%.0f", min_value=1),
@@ -1113,7 +1139,8 @@ def pagina_estoque():
                 })
             if st.button("💾 Salvar filamentos", type="primary", key="fil_salvar"):
                 aplicar_edicoes("filamentos", edit, lambda r: {
-                    "material": _txt(r["Material"]) or "PLA", "cor": _txt(r["Cor"]) or "?",
+                    "material": _txt(r["Material"]) or "PLA", "tipo": _txt(r["Tipo"]) or "Simples",
+                    "cor": _txt(r["Cor"]) or "?",
                     "marca": _txt(r["Marca"]), "preco_rolo": _num(r["Preço rolo"]),
                     "peso_rolo_g": _num(r["Peso rolo (g)"], 1000) or 1000,
                     "estoque_minimo_g": _num(r["Mínimo (g)"]), "obs": _txt(r["Obs"]),
@@ -1624,9 +1651,25 @@ def pagina_config():
         taxa = c5.number_input("Taxa de venda padrão (%)", min_value=0.0, max_value=90.0, step=1.0,
                                value=float(cfg["taxa_venda"]),
                                help="Maquininha ou marketplace. Use 0 se vendem mais por Pix.")
+        st.markdown("**🧵 Preço médio do filamento** (usado no custo de todas as peças)")
+        c6, c7 = st.columns(2)
+        kg_s = c6.number_input("Simples (R$ por kg)", min_value=0.0, step=5.0,
+                               value=float(cfg["preco_kg_simples"]),
+                               help="PLA e PETG comuns. Use 0 para o app calcular a média dos filamentos cadastrados.")
+        kg_e = c7.number_input("Especial (R$ por kg)", min_value=0.0, step=5.0,
+                               value=float(cfg["preco_kg_especial"]),
+                               help="Silk, velvet, glitter, TPU... Use 0 para a média automática dos especiais.")
+        _med = {t: [f["preco_rolo"] / f["peso_rolo_g"] * 1000 for f in db.listar("filamentos", True)
+                    if (f.get("tipo") or "Simples") == t and (f["preco_rolo"] or 0) > 0
+                    and (f["peso_rolo_g"] or 0) > 0]
+                for t in db.TIPOS_FILAMENTO}
+        st.caption("Para comparar, a média real dos rolos cadastrados hoje: "
+                   + " · ".join(f"{t} {brl(sum(v) / len(v))}/kg ({len(v)} filamento(s))" if v else f"{t}: nenhum"
+                                for t, v in _med.items()))
         if st.form_submit_button("💾 Salvar custos", type="primary"):
             db.set_config({"custo_kwh": kwh, "hora_trabalho": hora, "margem_padrao": margem,
-                           "taxa_falha": falha, "taxa_venda": taxa})
+                           "taxa_falha": falha, "taxa_venda": taxa,
+                           "preco_kg_simples": kg_s, "preco_kg_especial": kg_e})
             salvo("Custos atualizados!")
             st.rerun()
 

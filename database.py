@@ -15,6 +15,8 @@ STATUS_ABERTOS = ["Confirmado", "Produzindo", "Pronto"]
 CANAIS = ["Instagram", "WhatsApp", "Shopee", "Mercado Livre", "Elo7", "Feira/Evento", "Indicação", "Outro"]
 FORMAS_PAGAMENTO = ["Pix", "Dinheiro", "Cartão de crédito", "Cartão de débito", "Boleto", "Marketplace", "Outro"]
 MATERIAIS = ["PLA", "PLA Silk", "PETG", "ABS", "TPU", "Resina", "Outro"]
+TIPOS_FILAMENTO = ["Simples", "Especial"]
+MATERIAIS_ESPECIAIS = {"PLA Silk", "TPU", "Resina"}  # sugestao de tipo no cadastro
 CATEGORIAS_ENTRADA = ["Venda", "Aporte dos sócios", "Outros"]
 CATEGORIAS_SAIDA = [
     "Filamento", "Insumos", "Embalagem", "Equipamentos", "Manutenção", "Energia",
@@ -27,6 +29,8 @@ CONFIG_PADRAO = {
     "margem_padrao": 100.0,      # % de lucro sobre o custo
     "taxa_falha": 10.0,          # % extra de material para cobrir falhas/suportes
     "taxa_venda": 0.0,           # % de taxa da maquininha/marketplace
+    "preco_kg_simples": 115.0,   # R$/kg p/ filamentos simples, definido pela Luana (0 = media automatica)
+    "preco_kg_especial": 150.0,  # R$/kg p/ filamentos especiais, definido pela Luana (0 = media automatica)
 }
 
 
@@ -178,6 +182,10 @@ def init_db():
         );
         """)
         # Migracoes: colunas novas em bancos ja existentes
+        for tabela, col, tipo in [("filamentos", "tipo", "TEXT DEFAULT 'Simples'"),
+                                  ("produtos", "tipo_filamento", "TEXT")]:
+            if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")}:
+                c.execute(f"ALTER TABLE {tabela} ADD COLUMN {col} {tipo}")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(lancamentos)")}
         for col, tipo in [("pago", "INTEGER DEFAULT 1"), ("parcelamento_id", "INTEGER"),
                           ("parcela_num", "INTEGER"), ("parcela_total", "INTEGER")]:
@@ -218,11 +226,11 @@ def get_acessos(limite=10):
 _COLUNAS = {
     "impressoras": ["nome", "potencia_w", "valor_compra", "vida_util_horas", "ativa"],
     "filamentos": ["material", "cor", "marca", "preco_rolo", "peso_rolo_g", "estoque_g",
-                   "estoque_minimo_g", "obs", "ativo"],
+                   "estoque_minimo_g", "obs", "ativo", "tipo"],
     "insumos": ["nome", "unidade", "custo_unit", "estoque", "estoque_minimo", "ativo"],
     "produtos": ["nome", "categoria", "filamento_id", "impressora_id", "gramas", "horas_impressao",
                  "minutos_trabalho", "custo_extra", "margem_pct", "preco_venda", "estoque_pronto",
-                 "estoque_minimo", "obs", "ativo"],
+                 "estoque_minimo", "obs", "ativo", "tipo_filamento"],
     "clientes": ["nome", "telefone", "instagram", "email", "cidade", "obs"],
 }
 
@@ -282,12 +290,39 @@ def nome_filamento(f):
 
 # ---------------------------------------------------------------- precificacao
 
-def calcular_custo(gramas, horas, minutos_trabalho, custo_extra, filamento=None, impressora=None, cfg=None):
-    """Retorna dict com o custo detalhado de UMA unidade."""
+def medias_filamento(cfg=None):
+    """Preco por kg usado nos custos, por tipo: {"Simples": {...}, "Especial": {...}}.
+
+    Cada tipo usa o valor fixo das Configuracoes (se > 0) ou a media simples do R$/kg dos
+    filamentos ativos daquele tipo. Tipo sem filamento cadastrado usa a media do outro.
+    """
     cfg = cfg or get_config()
-    custo_g = 0.0
-    if filamento and (filamento.get("peso_rolo_g") or 0) > 0:
-        custo_g = (filamento.get("preco_rolo") or 0) / filamento["peso_rolo_g"]
+    with _conn() as c:
+        fils = _rows(c.execute("""SELECT COALESCE(tipo, 'Simples') AS tipo, preco_rolo, peso_rolo_g
+                                  FROM filamentos WHERE ativo=1 AND preco_rolo > 0 AND peso_rolo_g > 0"""))
+    out = {}
+    for t in TIPOS_FILAMENTO:
+        precos = [f["preco_rolo"] / f["peso_rolo_g"] * 1000 for f in fils if f["tipo"] == t]
+        fixo = cfg.get(f"preco_kg_{t.lower()}") or 0
+        out[t] = {"preco_kg": fixo if fixo > 0 else (sum(precos) / len(precos) if precos else 0.0),
+                  "qtd": len(precos), "fixo": fixo > 0}
+    for t, outro in (("Simples", "Especial"), ("Especial", "Simples")):
+        if not out[t]["preco_kg"]:
+            out[t]["preco_kg"] = out[outro]["preco_kg"]
+    return out
+
+
+def calcular_custo(gramas, horas, minutos_trabalho, custo_extra, filamento=None, impressora=None, cfg=None,
+                   tipo_filamento=None, medias=None):
+    """Retorna dict com o custo detalhado de UMA unidade.
+
+    O material usa o preco MEDIO por kg do tipo (Simples/Especial), nao o preco do rolo:
+    o tipo vem de `tipo_filamento` ou, se nao vier, do filamento informado.
+    """
+    cfg = cfg or get_config()
+    medias = medias or medias_filamento(cfg)
+    tipo = tipo_filamento or (filamento or {}).get("tipo") or "Simples"
+    custo_g = medias.get(tipo, medias["Simples"])["preco_kg"] / 1000
     material = (gramas or 0) * custo_g * (1 + (cfg["taxa_falha"] or 0) / 100)
 
     potencia = (impressora or {}).get("potencia_w") or 150
@@ -315,11 +350,12 @@ def preco_sugerido(custo_total, margem_pct, taxa_venda_pct=0.0):
     return base / (1 - taxa)
 
 
-def custo_produto(produto, cfg=None):
+def custo_produto(produto, cfg=None, medias=None):
     fil = obter("filamentos", produto["filamento_id"]) if produto.get("filamento_id") else None
     imp = obter("impressoras", produto["impressora_id"]) if produto.get("impressora_id") else None
     return calcular_custo(produto.get("gramas"), produto.get("horas_impressao"),
-                          produto.get("minutos_trabalho"), produto.get("custo_extra"), fil, imp, cfg)
+                          produto.get("minutos_trabalho"), produto.get("custo_extra"), fil, imp, cfg,
+                          tipo_filamento=produto.get("tipo_filamento"), medias=medias)
 
 
 # ---------------------------------------------------------------- estoque
@@ -746,10 +782,11 @@ def aplicar_importacao(dados, usuario="Importação"):
                 pulados += 1
                 continue
             peso = f.get("peso_rolo_g", 1000)
+            tipo = f.get("tipo") or ("Especial" if f["material"] in MATERIAIS_ESPECIAIS else "Simples")
             cur = c.execute("""INSERT INTO filamentos(material, cor, marca, preco_rolo, peso_rolo_g, estoque_g,
-                               estoque_minimo_g, obs, ativo) VALUES (?,?,?,?,?,0,?,?,1)""",
+                               estoque_minimo_g, obs, ativo, tipo) VALUES (?,?,?,?,?,0,?,?,1,?)""",
                             (f["material"], f["cor"], f.get("marca", ""), f.get("preco_rolo", 0), peso,
-                             f.get("estoque_minimo_g", 300), f.get("obs", "")))
+                             f.get("estoque_minimo_g", 300), f.get("obs", ""), tipo))
             if f.get("rolos", 0) > 0:
                 _mover(c, "filamento", cur.lastrowid, f["rolos"] * peso, "Estoque inicial (importação)")
             n_fil += 1
