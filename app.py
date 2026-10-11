@@ -12,36 +12,96 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from PIL import Image
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, BASE_DIR)
 
 import database as db
 
+# --- Identidade visual (Manual da marca v1.1, out/2026) ---
+ASSETS = os.path.join(BASE_DIR, "assets")
+LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao principal (nome branco)
+LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
+SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
+SLOGAN = "Feito para transformar."
+
+AZUL = "#190A76"      # fundo principal, textos
+ROSA = "#F1287C"      # o B e titulos grandes
+LARANJA = "#FF5110"   # asas e destaques
+VERDE = "#4BB74F"     # assinatura
+ROXO = "#9428B3"      # asas
+LILAS = "#D2CBF4"     # textos de apoio sobre o azul
+LAVANDA = "#EEEBFC"   # quadros e detalhes sobre o branco
+# Papeis semanticos usados nas telas
+VERMELHO = LARANJA    # despesas / alerta
+AMBAR = ROSA          # a receber
+
 # --- Page Config (DEVE vir antes de qualquer outro comando st) ---
 st.set_page_config(
-    page_title="Borboleta Estúdio Criativo",
-    page_icon="🦋",
+    page_title="Borboleta · Estúdio Criativo",
+    page_icon=Image.open(SIMBOLO),
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-ROXO = "#8B5CF6"
-ROSA = "#EC4899"
-VERDE = "#10B981"
-VERMELHO = "#EF4444"
-AMBAR = "#F59E0B"
-AZUL = "#3B82F6"
-
-st.markdown("""
+st.markdown(f"""
 <style>
-    .card { background:#FFFFFF; border:1px solid #EDE9FE; border-radius:14px; padding:14px 16px;
-            box-shadow:0 1px 3px rgba(139,92,246,.08); margin-bottom:10px; }
-    .card-t { color:#6B7280; font-size:.78em; text-transform:uppercase; letter-spacing:.04em; }
-    .card-v { color:#1E293B; font-size:1.45em; font-weight:700; margin-top:2px; }
-    .card-s { color:#9CA3AF; font-size:.8em; margin-top:2px; }
-    section[data-testid="stSidebar"] .stButton button { justify-content:flex-start; }
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+
+    /* Fonte da marca em tudo, menos nos icones do Streamlit */
+    html, body, .stApp *:not([data-testid="stIconMaterial"]):not(code):not(pre) {{
+        font-family: 'Plus Jakarta Sans', 'Source Sans Pro', sans-serif;
+    }}
+    .stApp h1 {{ color:{AZUL}; font-weight:800; letter-spacing:-.01em; }}
+    .stApp h2, .stApp h3, .stApp h4, .stApp h5 {{ color:{AZUL}; font-weight:700; }}
+
+    /* Camadas: faixas nas cores da marca (no branco, a primeira e azul) */
+    .camadas {{ display:flex; gap:4px; margin:-6px 0 18px 0; }}
+    .camadas span {{ height:6px; width:44px; border-radius:3px; }}
+    .slogan {{ color:{ROXO}; font-weight:600; margin:-4px 0 4px 0; }}
+
+    /* Cartoes de numeros */
+    .card {{ background:#FFFFFF; border:1px solid {LAVANDA}; border-radius:14px; padding:14px 16px;
+             box-shadow:0 1px 3px rgba(25,10,118,.07); margin-bottom:10px; }}
+    .card-t {{ color:{ROXO}; font-size:.72em; font-weight:700; text-transform:uppercase; letter-spacing:.08em; }}
+    .card-v {{ color:{AZUL}; font-size:1.45em; font-weight:800; margin-top:2px; }}
+    .card-s {{ color:#6B6597; font-size:.8em; margin-top:2px; }}
+
+    /* Barra lateral no azul da marca */
+    section[data-testid="stSidebar"] {{ background-color:{AZUL}; }}
+    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] label {{ color:#FFFFFF; }}
+    section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{ color:{LILAS}; }}
+    section[data-testid="stSidebar"] hr {{ border-color:rgba(255,255,255,.15); }}
+    section[data-testid="stSidebar"] [data-testid="stIconMaterial"] {{ color:#FFFFFF; }}
+    section[data-testid="stSidebar"] .stButton button {{ justify-content:flex-start; border-radius:10px; }}
+    section[data-testid="stSidebar"] button[kind="secondary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {{
+        background:transparent; border:1px solid rgba(255,255,255,.16); color:#FFFFFF; }}
+    section[data-testid="stSidebar"] button[kind="secondary"]:hover,
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"]:hover {{
+        background:rgba(255,255,255,.08); border-color:{ROSA}; color:#FFFFFF; }}
+    section[data-testid="stSidebar"] button[kind="primary"],
+    section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {{
+        background:{ROSA}; border-color:{ROSA}; color:#FFFFFF; font-weight:700; }}
+    section[data-testid="stSidebar"] [data-testid="stAlert"] p {{ color:#7A1630; }}
 </style>
 """, unsafe_allow_html=True)
+
+
+def camadas(fundo_azul=False):
+    # Manual: no azul a primeira faixa e branca; no branco, ela e azul
+    cores = ["#FFFFFF" if fundo_azul else AZUL, ROSA, LARANJA, VERDE, ROXO]
+    return '<div class="camadas">' + "".join(f'<span style="background:{c}"></span>' for c in cores) + "</div>"
+
+
+def titulo(texto, slogan=False):
+    """Titulo de pagina no padrao da marca: titulo + faixas 'camadas'."""
+    st.title(texto)
+    if slogan:
+        st.markdown(f'<div class="slogan">{SLOGAN}</div>', unsafe_allow_html=True)
+    st.markdown(camadas(), unsafe_allow_html=True)
 
 
 # === TELA DE LOGIN ===
@@ -54,16 +114,22 @@ def check_password():
     if st.session_state.authenticated:
         return True
 
-    st.markdown("""
+    # Tela de entrada no azul da marca, com a versao principal do logo (nome em branco)
+    st.markdown(f"""
     <style>
-        .block-container { max-width: 450px; padding-top: 5rem; }
+        .stApp {{ background:{AZUL}; }}
+        header[data-testid="stHeader"] {{ background:transparent; }}
+        .block-container {{ max-width: 430px; padding-top: 3rem; }}
+        [data-testid="stForm"] {{ background:#FFFFFF; border:none; border-radius:18px; padding:22px; }}
+        .login-slogan {{ text-align:center; color:#FFFFFF; font-size:1.25em; font-weight:700; margin:6px 0 2px 0; }}
+        .login-rodape {{ text-align:center; color:{LILAS}; font-size:.82em; margin-top:26px; }}
     </style>
-    <div style="text-align:center;margin-bottom:30px;">
-        <div style="font-size:3.2em;margin-bottom:6px;">🦋</div>
-        <h1 style="color:#1E293B;margin-bottom:4px;">Borboleta</h1>
-        <p style="color:#8B5CF6;font-size:1.1em;letter-spacing:.08em;">ESTÚDIO CRIATIVO</p>
-    </div>
     """, unsafe_allow_html=True)
+    _, c_logo, _ = st.columns([1, 3, 1])
+    c_logo.image(LOGO_FUNDO_AZUL, use_container_width=True)
+    st.markdown(f'<div class="login-slogan">{SLOGAN}</div>'
+                f'<div style="display:flex;justify-content:center;">{camadas(fundo_azul=True)}</div>',
+                unsafe_allow_html=True)
 
     with st.form("login_form"):
         usuario = st.text_input("👤 Usuário", placeholder="Digite seu nome")
@@ -89,6 +155,7 @@ def check_password():
                 print(f"[ACESSO] FALHA login usuario='{usuario_lower}'", flush=True)
                 st.error("Usuário ou senha incorretos.")
 
+    st.markdown('<div class="login-rodape">🔒 Acesso restrito a Luana e Tayrone</div>', unsafe_allow_html=True)
     return False
 
 
@@ -249,6 +316,7 @@ def impressora_padrao():
 
 def layout_grafico(fig, altura=340):
     fig.update_layout(height=altura, margin=dict(l=10, r=10, t=30, b=10), separators=",.",
+                      font=dict(family="Plus Jakarta Sans, sans-serif", color=AZUL),
                       legend=dict(orientation="h", y=1.12), plot_bgcolor="rgba(0,0,0,0)",
                       paper_bgcolor="rgba(0,0,0,0)")
     return fig
@@ -287,13 +355,9 @@ if "pagina" not in st.session_state:
     st.session_state.pagina = PG_INICIO
 
 with st.sidebar:
-    st.markdown("""
-    <div style="text-align:center;margin:-10px 0 14px 0;">
-        <div style="font-size:2.2em;">🦋</div>
-        <div style="font-weight:700;font-size:1.25em;color:#1E293B;">Borboleta</div>
-        <div style="color:#8B5CF6;font-size:.75em;letter-spacing:.12em;">ESTÚDIO CRIATIVO</div>
-    </div>
-    """, unsafe_allow_html=True)
+    _, _c_logo, _ = st.columns([1, 5, 1])
+    _c_logo.image(LOGO_FUNDO_AZUL, use_container_width=True)
+    st.markdown(camadas(fundo_azul=True), unsafe_allow_html=True)
     for _p in PAGINAS:
         if st.button(_p, key=f"nav_{_p}", use_container_width=True,
                      type="primary" if _p == st.session_state.pagina else "secondary"):
@@ -302,7 +366,7 @@ with st.sidebar:
     st.divider()
     if is_cloud() and get_last_sync_status().get("ok") is False:
         st.error(f"☁️ {get_last_sync_status().get('msg')}")
-    st.caption(f"Olá, {USUARIO}! 💜")
+    st.caption(f"Olá, {USUARIO}! · {SLOGAN}")
     if st.button("Sair", key="logout", use_container_width=True):
         for _k in list(st.session_state.keys()):
             del st.session_state[_k]
@@ -314,7 +378,10 @@ with st.sidebar:
 # =====================================================================
 
 def pagina_inicio():
-    st.title("🦋 Borboleta Estúdio Criativo")
+    c_logo, c_tit = st.columns([1, 7], vertical_alignment="center")
+    c_logo.image(LOGO_FUNDO_CLARO, use_container_width=True)
+    with c_tit:
+        titulo("Painel do estúdio", slogan=True)
     c1, _ = st.columns([1, 3])
     with c1:
         mes = seletor_mes("inicio_mes")
@@ -401,7 +468,7 @@ def pagina_inicio():
             fig.add_bar(x=df["Mês"], y=df["entradas"], name="Entradas", marker_color=VERDE)
             fig.add_bar(x=df["Mês"], y=df["saidas"], name="Despesas", marker_color=VERMELHO)
             fig.add_scatter(x=df["Mês"], y=df["resultado"], name="Resultado", mode="lines+markers",
-                            line=dict(color=ROXO, width=3))
+                            line=dict(color=AZUL, width=3), marker=dict(color=AZUL))
             fig.update_layout(barmode="group", yaxis_tickprefix="R$ ")
             st.plotly_chart(layout_grafico(fig), key="graf_inicio_mensal")
     with col_d:
@@ -426,7 +493,7 @@ COLS_ITENS = ["Produto", "Descrição", "Qtd", "Preço un.", "Filamento", "Grama
 
 
 def pagina_pedidos():
-    st.title("🧾 Pedidos")
+    titulo("🧾 Pedidos")
     if "ped_msg" in st.session_state:
         st.success(st.session_state.pop("ped_msg"))
 
@@ -656,7 +723,7 @@ def pagina_pedidos():
 # =====================================================================
 
 def pagina_clientes():
-    st.title("👥 Clientes")
+    titulo("👥 Clientes")
 
     with st.expander("➕ Cadastrar cliente", expanded=False):
         with st.form("form_novo_cliente", clear_on_submit=True):
@@ -749,7 +816,7 @@ def arredondar_preco(v):
 
 
 def pagina_produtos():
-    st.title("🏷️ Produtos & Preços")
+    titulo("🏷️ Produtos & Preços")
     tab_calc, tab_cat = st.tabs(["🧮 Calculadora de preço", "📚 Catálogo de produtos"])
     cfg = db.get_config()
     fils = opcoes_filamentos()
@@ -921,7 +988,7 @@ def form_compra(tipo, opcoes, unidade_fn, key):
 
 
 def pagina_estoque():
-    st.title("📦 Estoque")
+    titulo("📦 Estoque")
     tab_fil, tab_ins, tab_prod, tab_hist = st.tabs(
         ["🧵 Filamentos", "🧰 Insumos", "🎁 Peças prontas", "📜 Histórico"])
 
@@ -1161,7 +1228,7 @@ def pagina_estoque():
 # =====================================================================
 
 def pagina_financeiro():
-    st.title("💰 Financeiro")
+    titulo("💰 Financeiro")
     c1, _ = st.columns([1, 3])
     with c1:
         mes = seletor_mes("fin_mes")
@@ -1291,7 +1358,7 @@ def exportar_excel():
 
 
 def pagina_config():
-    st.title("⚙️ Configurações")
+    titulo("⚙️ Configurações")
     cfg = db.get_config()
 
     st.markdown("#### 💡 Custos usados na precificação")

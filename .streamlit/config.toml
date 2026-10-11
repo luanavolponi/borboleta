@@ -1,9 +1,10 @@
+# Cores do Manual da marca Borboleta (v1.1, out/2026)
 [theme]
 base = "light"
-primaryColor = "#8B5CF6"
+primaryColor = "#F1287C"              # rosa
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#FAF5FF"
-textColor = "#1E293B"
+secondaryBackgroundColor = "#EEEBFC"  # lavanda (quadros sobre o branco)
+textColor = "#190A76"                 # azul
 font = "sans serif"
 
 [server]
