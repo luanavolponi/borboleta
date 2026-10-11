@@ -17,6 +17,6 @@ __pycache__/
 Thumbs.db
 
 # Dados da empresa NUNCA vao para este repositorio (ele e publico).
-# Eles ficam no repositorio privado luanavolponi/borboleta-dados.
+# Eles ficam no repositorio privado luanavolponi/borboletaestudio.
 data/
 *.db

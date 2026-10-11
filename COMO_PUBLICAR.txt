@@ -6,7 +6,7 @@ São DOIS repositórios no GitHub (conta luanavolponi):
 
   borboleta         -> PÚBLICO. Só o código (a programação).
                        Nenhum dado, nenhuma senha.
-  borboleta-dados   -> PRIVADO. Os dados da empresa
+  borboletaestudio  -> PRIVADO. Os dados da empresa
                        (clientes, pedidos, estoque, finanças),
                        no arquivo data/borboleta.db, que o
                        próprio app salva e lê.
@@ -28,7 +28,7 @@ PASSO 1: Deixar o repositório "borboleta" público
 PASSO 2: Criar o repositório de dados (privado)
 ------------------------------------------------------------
 1. https://github.com/new
-2. Repository name: borboleta-dados
+2. Repository name: borboletaestudio  (o de DADOS)
 3. Marque "Private"
 4. MARQUE "Add a README file" (precisa ter algo dentro)
 5. "Create repository"
@@ -45,13 +45,13 @@ PASSO 3: Publicar no Streamlit
 3. "Advanced settings" > Secrets, cole:
 
    github_token = "MESMO_TOKEN_DO_APP_DO_ORCAMENTO"
-   github_repo = "luanavolponi/borboleta-dados"
+   github_repo = "luanavolponi/borboletaestudio"
 
    [passwords]
    luana = "SENHA_DA_LUANA"
    tayrone = "SENHA_DO_TAYRONE"
 
-   ATENÇÃO: github_repo é o de DADOS (borboleta-dados)!
+   ATENÇÃO: github_repo é o de DADOS (borboletaestudio)!
 
 4. "Deploy"
 
