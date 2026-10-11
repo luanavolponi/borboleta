@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Exportacoes
+*.xlsx
+
+# Segredos locais
+.streamlit/secrets.toml
+
+# Claude Code
+.claude/
+
+# Sistema
+.DS_Store
+Thumbs.db

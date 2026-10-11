@@ -1,0 +1,86 @@
+============================================================
+  COMO PUBLICAR O APP DA BORBOLETA ESTÚDIO CRIATIVO
+  (mesmo esquema do app do orçamento)
+============================================================
+
+O app é igual ao do orçamento por dentro: os dados ficam num
+arquivo (data/borboleta.db) que o próprio app salva no GitHub
+sempre que vocês gravam alguma coisa.
+
+
+------------------------------------------------------------
+PASSO 1: Criar o repositório no GitHub (privado)
+------------------------------------------------------------
+1. Acesse https://github.com/new
+2. Repository name: borboleta
+3. Marque "Private"
+4. NÃO marque "Add a README"
+5. Clique em "Create repository"
+
+(O Claude pode subir o código para lá se você gerar um token
+temporário em github.com/settings/tokens com escopo "repo".)
+
+
+------------------------------------------------------------
+PASSO 2: Publicar no Streamlit Cloud
+------------------------------------------------------------
+1. Acesse https://share.streamlit.io
+2. "Create app" > "Deploy a public app from GitHub"
+3. Repository: luanavolponi/borboleta
+   Branch: main
+   Main file path: app.py
+4. App URL: escolha algo como borboleta-estudio
+5. Clique em "Deploy"
+
+ATENÇÃO: a conta gratuita do Streamlit só permite 1 app
+PRIVADO, e esse lugar já é do app do orçamento. Por isso
+este app fica "público" no Streamlit — mas ninguém entra
+sem usuário e senha (sem senha nos Secrets, o login é
+bloqueado). O código e os dados continuam no repositório
+privado do GitHub.
+
+
+------------------------------------------------------------
+PASSO 3: Configurar os Secrets (senhas e nuvem)
+------------------------------------------------------------
+No Streamlit: seu app > "..." > Settings > Secrets. Cole:
+
+   github_token = "COLE_AQUI_UM_TOKEN_DO_GITHUB"
+   github_repo = "luanavolponi/borboleta"
+
+   [passwords]
+   luana = "SENHA_DA_LUANA"
+   tayrone = "SENHA_DO_TAYRONE"
+
+- O github_token pode ser o MESMO token que já está nos
+  Secrets do app do orçamento (ele tem acesso aos dois
+  repositórios). Ou gere um novo (escopo "repo", sem
+  expiração).
+- Clique em "Save". O app reinicia sozinho.
+
+
+------------------------------------------------------------
+PASSO 4: Primeiro uso (ordem sugerida)
+------------------------------------------------------------
+1. ⚙️ Configurações: preço do kWh (conta de luz), valor da
+   sua hora de trabalho, margem de lucro, e cadastre a(s)
+   impressora(s).
+2. 📦 Estoque > Filamentos: cadastre cada rolo (material,
+   cor, preço, quanto já têm).
+3. 🏷️ Produtos & Preços: use a calculadora com o peso e o
+   tempo que o fatiador mostra e salve os produtos.
+4. 🧾 Pedidos: comece a lançar as vendas!
+
+
+------------------------------------------------------------
+COMO O APP FUNCIONA SOZINHO
+------------------------------------------------------------
+- Pedido com "valor recebido" -> entra no Financeiro como
+  Venda (e se mudar o valor no pedido, o Financeiro acompanha).
+- Pedido marcado como "Entregue" -> as peças saem do estoque
+  de prontas; se não tiver pronta, desconta o filamento.
+  Se voltar o status ou excluir o pedido, o estoque volta.
+- Compra de filamento/insumo no Estoque -> vira despesa no
+  Financeiro (dá pra desmarcar).
+- "Registrar produção" -> desconta filamento e soma peças
+  prontas.
