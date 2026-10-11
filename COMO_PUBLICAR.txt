@@ -1,66 +1,74 @@
 ============================================================
   COMO PUBLICAR O APP DA BORBOLETA ESTÚDIO CRIATIVO
-  (mesmo esquema do app do orçamento)
 ============================================================
 
-O app é igual ao do orçamento por dentro: os dados ficam num
-arquivo (data/borboleta.db) que o próprio app salva no GitHub
-sempre que vocês gravam alguma coisa.
+São DOIS repositórios no GitHub (conta luanavolponi):
+
+  borboleta         -> PÚBLICO. Só o código (a programação).
+                       Nenhum dado, nenhuma senha.
+  borboleta-dados   -> PRIVADO. Os dados da empresa
+                       (clientes, pedidos, estoque, finanças),
+                       no arquivo data/borboleta.db, que o
+                       próprio app salva e lê.
+
+Por quê? O Streamlit grátis só aceita 1 app privado por conta
+(já é do orçamento). Um app de código público pode ser
+publicado à vontade — e continua protegido pelo login.
 
 
 ------------------------------------------------------------
-PASSO 1: Criar o repositório no GitHub (privado)
+PASSO 1: Deixar o repositório "borboleta" público
 ------------------------------------------------------------
-1. Acesse https://github.com/new
-2. Repository name: borboleta
+1. https://github.com/luanavolponi/borboleta/settings
+2. Role até o fim ("Danger Zone") > "Change visibility"
+   > "Change to public" e confirme.
+
+
+------------------------------------------------------------
+PASSO 2: Criar o repositório de dados (privado)
+------------------------------------------------------------
+1. https://github.com/new
+2. Repository name: borboleta-dados
 3. Marque "Private"
-4. NÃO marque "Add a README"
-5. Clique em "Create repository"
-
-(O Claude pode subir o código para lá se você gerar um token
-temporário em github.com/settings/tokens com escopo "repo".)
+4. MARQUE "Add a README file" (precisa ter algo dentro)
+5. "Create repository"
 
 
 ------------------------------------------------------------
-PASSO 2: Publicar no Streamlit Cloud
+PASSO 3: Publicar no Streamlit
 ------------------------------------------------------------
-1. Acesse https://share.streamlit.io
-2. "Create app" > "Deploy a public app from GitHub"
-3. Repository: luanavolponi/borboleta
+1. https://share.streamlit.io > "Create app"
+2. Repository: luanavolponi/borboleta
    Branch: main
    Main file path: app.py
-4. App URL: escolha algo como borboleta-estudio
-5. Clique em "Deploy"
+   App URL: ex.: borboleta-estudio
+3. "Advanced settings" > Secrets, cole:
 
-ATENÇÃO: a conta gratuita do Streamlit só permite 1 app
-PRIVADO, e esse lugar já é do app do orçamento. Por isso
-este app fica "público" no Streamlit — mas ninguém entra
-sem usuário e senha (sem senha nos Secrets, o login é
-bloqueado). O código e os dados continuam no repositório
-privado do GitHub.
-
-
-------------------------------------------------------------
-PASSO 3: Configurar os Secrets (senhas e nuvem)
-------------------------------------------------------------
-No Streamlit: seu app > "..." > Settings > Secrets. Cole:
-
-   github_token = "COLE_AQUI_UM_TOKEN_DO_GITHUB"
-   github_repo = "luanavolponi/borboleta"
+   github_token = "MESMO_TOKEN_DO_APP_DO_ORCAMENTO"
+   github_repo = "luanavolponi/borboleta-dados"
 
    [passwords]
    luana = "SENHA_DA_LUANA"
    tayrone = "SENHA_DO_TAYRONE"
 
-- O github_token pode ser o MESMO token que já está nos
-  Secrets do app do orçamento (ele tem acesso aos dois
-  repositórios). Ou gere um novo (escopo "repo", sem
-  expiração).
-- Clique em "Save". O app reinicia sozinho.
+   ATENÇÃO: github_repo é o de DADOS (borboleta-dados)!
+
+4. "Deploy"
 
 
 ------------------------------------------------------------
-PASSO 4: Primeiro uso (ordem sugerida)
+SEGURANÇA
+------------------------------------------------------------
+- Sem senha nos Secrets, o login fica bloqueado.
+- Se o app não conseguir carregar os dados da nuvem, ele
+  mostra um aviso vermelho na barra lateral e NÃO salva nada
+  (para não apagar os dados de verdade). Recarregue a página;
+  se continuar, o github_token provavelmente expirou — troque
+  por um novo nos Secrets.
+
+
+------------------------------------------------------------
+PRIMEIRO USO (ordem sugerida)
 ------------------------------------------------------------
 1. ⚙️ Configurações: preço do kWh (conta de luz), valor da
    sua hora de trabalho, margem de lucro, e cadastre a(s)

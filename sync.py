@@ -13,10 +13,14 @@ import streamlit as st
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(REPO_DIR, "data", "borboleta.db")
-DB_REPO_PATH = "data/borboleta.db"
+DB_REPO_PATH = "data/borboleta.db"  # caminho dentro do repo de DADOS (Secret github_repo)
 
 # Status do ultimo sync (visivel na sidebar)
 _last_sync_status = {"ok": None, "msg": "", "detail": ""}
+
+# Trava de seguranca: so libera o push depois que o pull deu certo (ou se ainda nao
+# existe banco na nuvem). Evita sobrescrever os dados da nuvem com um banco vazio.
+_estado = {"push_liberado": False}
 
 
 def _log(msg):
@@ -139,6 +143,12 @@ def pull_database():
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main"
     status, data = _github_api("GET", url, token)
 
+    if status == 404:
+        _log("Banco ainda nao existe na nuvem (primeiro uso)")
+        _set_status(True, "Primeiro uso: banco sera criado na nuvem")
+        _estado["push_liberado"] = True
+        return False
+
     if status != 200:
         _log(f"Pull falhou: status={status}")
         _set_status(False, f"Pull falhou (status {status})")
@@ -183,12 +193,18 @@ def pull_database():
 
     _log(f"Pull OK! {len(db_bytes)} bytes")
     _set_status(True, f"Pull OK ({len(db_bytes)} bytes)")
+    _estado["push_liberado"] = True
     return True
 
 
 def push_database():
     """Envia o banco de dados atualizado para o GitHub."""
     _log("=== PUSH INICIANDO ===")
+    if not _estado["push_liberado"]:
+        _log("Push BLOQUEADO: o pull nao deu certo nesta execucao")
+        _set_status(False, "Os dados da nuvem nao carregaram - nada foi salvo para nao apagar nada",
+                    "Recarregue a pagina. Se continuar, confira o github_token nos Secrets.")
+        return False
     token, owner, repo = _get_config()
     if not token:
         return False

@@ -300,6 +300,8 @@ with st.sidebar:
             st.session_state.pagina = _p
             st.rerun()
     st.divider()
+    if is_cloud() and get_last_sync_status().get("ok") is False:
+        st.error(f"☁️ {get_last_sync_status().get('msg')}")
     st.caption(f"Olá, {USUARIO}! 💜")
     if st.button("Sair", key="logout", use_container_width=True):
         for _k in list(st.session_state.keys()):
