@@ -166,7 +166,7 @@ if not check_password():
 
 
 # --- Sync: puxa dados mais recentes do GitHub (na nuvem) ---
-from sync import (pull_database, push_database, is_cloud, test_sync, get_last_sync_status,  # noqa: E402
+from sync import (pull_database, push_database, is_cloud, get_last_sync_status,  # noqa: E402
                   importar_pendentes, diagnostico)
 
 if is_cloud() and "db_pulled" not in st.session_state:
