@@ -25,7 +25,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.6 · 11/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.7 · 11/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -86,7 +86,8 @@ st.markdown(f"""
     section[data-testid="stSidebar"] button[kind="primary"],
     section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {{
         background:{ROSA}; border-color:{ROSA}; color:#FFFFFF; font-weight:700; }}
-    section[data-testid="stSidebar"] [data-testid="stAlert"] p {{ color:#7A1630; }}
+    section[data-testid="stSidebar"] [data-testid="stAlert"] {{ background:#FFE4EC; border-radius:10px; }}
+    section[data-testid="stSidebar"] [data-testid="stAlert"] p {{ color:#7A1630; font-weight:600; }}
 </style>
 """, unsafe_allow_html=True)
 

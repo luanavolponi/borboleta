@@ -133,7 +133,13 @@ def _github_api(method, url, token, data=None, timeout=60):
 
 
 def pull_database():
-    """Baixa o banco de dados mais recente do GitHub."""
+    """Baixa o banco de dados mais recente do GitHub (e guarda o motivo, se falhar)."""
+    ok = _pull_database()
+    _estado["erro_pull"] = None if _estado["push_liberado"] else _last_sync_status.get("msg")
+    return ok
+
+
+def _pull_database():
     _log("=== PULL INICIANDO ===")
     token, owner, repo = _get_config()
     if not token:
@@ -209,7 +215,8 @@ def push_database():
     _log("=== PUSH INICIANDO ===")
     if not _estado["push_liberado"]:
         _log("Push BLOQUEADO: o pull nao deu certo nesta execucao")
-        _set_status(False, "Os dados da nuvem nao carregaram - nada foi salvo para nao apagar nada",
+        _set_status(False, "Os dados da nuvem nao carregaram (" + (_estado.get("erro_pull") or "motivo desconhecido")
+                    + ") - nada foi salvo para nao apagar nada",
                     "Recarregue a pagina. Se continuar, confira o github_token nos Secrets.")
         return False
     token, owner, repo = _get_config()
