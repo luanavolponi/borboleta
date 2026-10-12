@@ -196,7 +196,8 @@ def init_db():
                 c.execute(f"ALTER TABLE {tabela} ADD COLUMN {col} {tipo}")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(lancamentos)")}
         for col, tipo in [("pago", "INTEGER DEFAULT 1"), ("parcelamento_id", "INTEGER"),
-                          ("parcela_num", "INTEGER"), ("parcela_total", "INTEGER")]:
+                          ("parcela_num", "INTEGER"), ("parcela_total", "INTEGER"),
+                          ("data_compra", "TEXT")]:  # data em que a despesa foi feita (data = vencimento)
             if col not in cols:
                 c.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {tipo}")
         for k, v in CONFIG_PADRAO.items():
@@ -642,11 +643,11 @@ def _lancar_despesa(c, descricao, categoria, valor_total, n_parcelas, primeiro_v
     for i, v in enumerate(_valores_parcelas(float(valor_total), n)):
         venc = somar_meses(venc0, i)
         c.execute("""INSERT INTO lancamentos(data, tipo, categoria, descricao, valor, forma_pagamento, criado_por,
-                     pago, parcelamento_id, parcela_num, parcela_total)
-                     VALUES (?, 'saida', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     pago, parcelamento_id, parcela_num, parcela_total, data_compra)
+                     VALUES (?, 'saida', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                   (venc.isoformat(), categoria, f"{descricao} ({i + 1}/{n})" if n > 1 else descricao, v,
                    forma_pagamento, usuario, 1 if venc <= hoje else 0, parc_id,
-                   i + 1 if n > 1 else None, n if n > 1 else None))
+                   i + 1 if n > 1 else None, n if n > 1 else None, str(data_compra)[:10]))
     return parc_id
 
 
@@ -858,7 +859,7 @@ def analise_investimento(cfg=None):
     hoje = date.today()
     mes_atual = hoje.strftime("%Y-%m")
     with _conn() as c:
-        lancs = _rows(c.execute("""SELECT l.*, COALESCE(cp.data_compra, l.data) AS data_ref,
+        lancs = _rows(c.execute("""SELECT l.*, COALESCE(l.data_compra, cp.data_compra, l.data) AS data_ref,
                                           cp.descricao AS compra_desc
                                    FROM lancamentos l LEFT JOIN compras_parceladas cp ON cp.id = l.parcelamento_id"""))
     pedidos = [p for p in listar_pedidos() if p["status"] not in ("Orçamento", "Cancelado")]
