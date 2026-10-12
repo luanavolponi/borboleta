@@ -25,7 +25,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.7 · 11/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.8 · 11/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -367,8 +367,9 @@ PG_CLIENTES = "👥 Clientes"
 PG_PRODUTOS = "🏷️ Produtos & Preços"
 PG_ESTOQUE = "📦 Estoque"
 PG_FINANCEIRO = "💰 Financeiro"
+PG_INVEST = "📈 Investimento"
 PG_CONFIG = "⚙️ Configurações"
-PAGINAS = [PG_INICIO, PG_PEDIDOS, PG_CLIENTES, PG_PRODUTOS, PG_ESTOQUE, PG_FINANCEIRO, PG_CONFIG]
+PAGINAS = [PG_INICIO, PG_PEDIDOS, PG_CLIENTES, PG_PRODUTOS, PG_ESTOQUE, PG_FINANCEIRO, PG_INVEST, PG_CONFIG]
 
 if "pagina" not in st.session_state:
     st.session_state.pagina = PG_INICIO
@@ -1625,6 +1626,183 @@ def aba_contas_a_pagar():
 
 
 # =====================================================================
+# 📈 Investimento
+# =====================================================================
+
+def pagina_investimento():
+    titulo("📈 Investimento & retorno")
+    cfg = db.get_config()
+    a = db.analise_investimento(cfg)
+
+    if a["inicio"] is None:
+        st.info("🌱 **Fase de montagem:** ainda não houve vendas, então tudo o que foi gasto até agora conta como "
+                "investimento inicial. Quando o primeiro pedido for registrado, o app começa a medir faturamento, "
+                "lucro e o caminho até o payback.")
+    else:
+        st.caption(f"Operação contada a partir de {fmt_data(a['inicio'].isoformat())}. Antes disso, todo gasto é "
+                   "investimento inicial; depois, só a categoria Equipamentos.")
+    if a["pago_de_volta"]:
+        st.success("🎉 O investimento já se pagou: o lucro acumulado passou o total investido!")
+
+    linha_cards([
+        ("Total investido", brl(a["investido"]), AZUL,
+         f"{brl(a['investido_pago'])} pago · {brl(a['investido_a_pagar'])} a pagar"),
+        ("Faturamento acumulado", brl(a["faturamento_total"]), VERDE, f"{a['n_pedidos']} pedido(s)"),
+        ("Lucro acumulado", brl(a["lucro_acumulado"]), VERDE if a["lucro_acumulado"] >= 0 else VERMELHO,
+         "recebido − despesas do dia a dia"),
+        ("Retorno do investimento", f"{a['retorno_pct']:.0f}%", ROXO, f"falta recuperar {brl(a['falta_recuperar'])}"),
+    ])
+
+    pe = a["ponto_equilibrio"] if a["custos_fixos"] > 0 else None
+    if pe:
+        pe_sub = (f"≈ {math.ceil(pe / a['ticket_medio'])} pedido(s) de {brl(a['ticket_medio'])}"
+                  if a["ticket_medio"] else f"custos fixos de {brl(a['custos_fixos'])}/mês")
+    else:
+        pe_sub = "informe os custos fixos em ⚙️ Premissas"
+    if a["pago_de_volta"]:
+        pb_txt, pb_sub = "Concluído ✅", ""
+    elif a["payback_meses"] is not None:
+        meses_pb = math.ceil(a["payback_meses"])
+        quando = db.somar_meses(date.today(), meses_pb)
+        pb_txt, pb_sub = f"{meses_pb} meses", f"previsão: {MESES[quando.month - 1]}/{quando.year}"
+    else:
+        pb_txt, pb_sub = "—", "precisa de lucro mensal positivo"
+    linha_cards([
+        ("Ponto de equilíbrio", f"{brl(pe)}/mês" if pe else "—", ROSA, pe_sub),
+        ("Margem de contribuição", f"{a['margem_contribuicao'] * 100:.0f}%", LARANJA, f"pela {a['mc_origem']}"),
+        ("Lucro médio mensal", brl(a["lucro_medio"]), VERDE if a["lucro_medio"] >= 0 else VERMELHO,
+         "últimos 3 meses de operação" if a["meses_operando"] else "sem vendas ainda"),
+        ("Payback", pb_txt, AZUL, pb_sub),
+    ])
+
+    with st.expander("ℹ️ Como cada número é calculado"):
+        st.markdown(f"""
+- **Total investido:** tudo que foi gasto antes da primeira venda (montagem do estúdio: impressora, ferramentas,
+  estoque inicial) + compras de **Equipamentos** depois disso. Conta o valor cheio da compra, inclusive parcelas
+  que ainda vão vencer.
+- **Faturamento:** soma dos pedidos vendidos (sem orçamentos e cancelados).
+- **Lucro:** o que entrou de vendas − as despesas do dia a dia (filamento, energia, embalagem, MEI...), no mês em
+  que cada uma vence. Investimentos não entram aqui.
+- **Margem de contribuição:** quanto sobra de cada R$ 1 vendido depois do custo das peças e da taxa de venda
+  ({a['mc_origem']}).
+- **Ponto de equilíbrio:** custos fixos do mês ÷ margem de contribuição = quanto precisam vender por mês para não
+  ter prejuízo. Custos fixos usados: **{brl(a['custos_fixos'])}/mês**
+  ({'valor definido nas Premissas' if a['custos_fixos_fixo'] else 'média das despesas fixas dos últimos 3 meses'}).
+- **Payback:** (total investido − lucro acumulado) ÷ lucro médio dos últimos 3 meses = meses para o negócio
+  devolver o que foi investido.
+""")
+
+    # ---------- Onde foi investido
+    st.markdown("#### 💸 Onde foi investido")
+    if not a["itens_investimento"]:
+        st.caption("Nenhum investimento registrado ainda.")
+    else:
+        g1, g2 = st.columns([2, 3])
+        with g1:
+            cats = sorted(a["por_categoria"].items(), key=lambda x: x[1])
+            fig = go.Figure(go.Bar(x=[v for _, v in cats], y=[c for c, _ in cats], orientation="h",
+                                   marker_color=AZUL, text=[brl(v) for _, v in cats], textposition="auto"))
+            fig.update_layout(xaxis_tickprefix="R$ ", showlegend=False)
+            st.plotly_chart(layout_grafico(fig, 260), key="graf_inv_cat")
+        with g2:
+            st.dataframe(pd.DataFrame([{
+                "Data": fmt_data(i["data"]), "Compra": i["descricao"], "Categoria": i["categoria"],
+                "Valor": i["valor"], "Já pago": i["pago"],
+                "Situação": "✅ Quitado" if i["pago"] >= i["valor"] - 0.005 else "⏳ Pagando",
+            } for i in a["itens_investimento"]]), hide_index=True, use_container_width=True, height=260,
+                column_config={"Valor": st.column_config.NumberColumn(format=DINHEIRO),
+                               "Já pago": st.column_config.NumberColumn(format=DINHEIRO)})
+
+    # ---------- Caminho ate o payback
+    st.markdown("#### 🛣️ Caminho até o payback")
+    meses = a["meses"]
+    if not meses:
+        st.caption("O gráfico aparece quando houver lançamentos.")
+    else:
+        rot = [mes_label(m["mes"]) for m in meses]
+        fig = go.Figure()
+        fig.add_bar(x=rot, y=[m["lucro"] for m in meses], name="Lucro do mês",
+                    marker_color=[VERDE if m["lucro"] >= 0 else LARANJA for m in meses])
+        fig.add_scatter(x=rot, y=[m["saldo"] for m in meses], name="Lucro acumulado − investimento",
+                        mode="lines+markers", line=dict(color=AZUL, width=3))
+        saldo = meses[-1]["saldo"]
+        if a["lucro_medio"] > 0 and saldo < 0:
+            proj_x, proj_y, ym = [rot[-1]], [saldo], meses[-1]["mes"]
+            for _ in range(60):
+                ym = db._mes_seguinte(ym)
+                saldo += a["lucro_medio"]
+                proj_x.append(mes_label(ym))
+                proj_y.append(saldo)
+                if saldo >= 0:
+                    break
+            fig.add_scatter(x=proj_x, y=proj_y, name="Projeção (lucro médio)", mode="lines",
+                            line=dict(color=ROSA, width=2, dash="dash"))
+        fig.add_hline(y=0, line_color=VERDE, line_dash="dot", annotation_text="payback",
+                      annotation_position="top left")
+        fig.update_layout(yaxis_tickprefix="R$ ")
+        st.plotly_chart(layout_grafico(fig, 360), key="graf_payback")
+        st.caption("A linha azul começa negativa (o que foi investido) e sobe a cada mês de lucro. "
+                   "Quando cruzar o zero, o investimento se pagou.")
+
+        with st.expander("📋 Mês a mês"):
+            st.dataframe(pd.DataFrame([{
+                "Mês": mes_label(m["mes"]), "Faturamento": m["faturamento"], "Recebido": m["recebido"],
+                "Despesas do dia a dia": m["despesas"], "Lucro": m["lucro"], "Investimento": m["investimento"],
+                "Saldo do investimento": m["saldo"],
+            } for m in meses]), hide_index=True, use_container_width=True,
+                column_config={c: st.column_config.NumberColumn(format=DINHEIRO)
+                               for c in ["Faturamento", "Recebido", "Despesas do dia a dia", "Lucro",
+                                         "Investimento", "Saldo do investimento"]})
+
+    # ---------- Simulador
+    st.markdown("#### 🔮 Simulador: e se vendermos…")
+    s1, s2, s3 = st.columns(3)
+    fat_sim = s1.number_input("Faturamento por mês (R$)", min_value=0.0, step=100.0,
+                              value=float(round(max(a["faturamento_medio"], pe or 0, 1000.0), -2)), key="sim_fat")
+    mc_sim = s2.number_input("Margem de contribuição (%)", min_value=0.0, max_value=100.0, step=5.0,
+                             value=float(round(a["margem_contribuicao"] * 100)), key="sim_mc")
+    fixos_sim = s3.number_input("Custos fixos por mês (R$)", min_value=0.0, step=10.0,
+                                value=float(round(a["custos_fixos"], 2)), key="sim_fixos")
+    lucro_sim = fat_sim * mc_sim / 100 - fixos_sim
+    falta = a["falta_recuperar"]
+    if lucro_sim > 0 and falta > 0:
+        m_sim = math.ceil(falta / lucro_sim)
+        quando = db.somar_meses(date.today(), m_sim)
+        pb_sim, pb_sim_sub = f"{m_sim} meses", f"por volta de {MESES[quando.month - 1]}/{quando.year}"
+    elif falta <= 0:
+        pb_sim, pb_sim_sub = "já pago ✅", ""
+    else:
+        pb_sim, pb_sim_sub = "não se paga", "o lucro do mês fica zero ou negativo"
+    pe_sim = fixos_sim / (mc_sim / 100) if mc_sim > 0 else None
+    linha_cards([
+        ("Lucro por mês", brl(lucro_sim), VERDE if lucro_sim >= 0 else VERMELHO, "faturamento × margem − fixos"),
+        ("Ponto de equilíbrio", brl(pe_sim) + "/mês" if pe_sim else "—", ROSA, "vender pelo menos isso"),
+        ("Payback", pb_sim, AZUL, pb_sim_sub),
+    ])
+
+    # ---------- Premissas
+    with st.expander("⚙️ Premissas da análise"):
+        with st.form("form_premissas"):
+            p1, p2 = st.columns(2)
+            fixos_cfg = p1.number_input(
+                "Custos fixos mensais (R$)", min_value=0.0, step=10.0, value=float(cfg["custos_fixos_mensais"]),
+                help=f"O que vocês pagam todo mês mesmo sem vender: DAS do MEI, internet, assinaturas, parte da luz... "
+                     f"Deixe 0 para usar a média dos lançamentos (hoje {brl(a['custos_fixos_auto'])}/mês).")
+            with p2:
+                manual = st.checkbox("Definir manualmente a data de início das vendas",
+                                     value=(cfg["inicio_vendas"] or 0) > 0)
+                inicio_cfg = st.date_input("Início das vendas", format="DD/MM/YYYY",
+                                           value=a["inicio"] or date.today(),
+                                           help="Gastos antes desta data contam como investimento inicial. "
+                                                "Sem marcar acima, o app usa a data da primeira venda.")
+            if st.form_submit_button("💾 Salvar premissas", type="primary"):
+                db.set_config({"custos_fixos_mensais": fixos_cfg,
+                               "inicio_vendas": inicio_cfg.toordinal() if manual else 0})
+                salvo("Premissas salvas!")
+                st.rerun()
+
+
+# =====================================================================
 # ⚙️ Configuracoes
 # =====================================================================
 
@@ -1782,5 +1960,6 @@ for _msg in st.session_state.pop("importacao_msgs", None) or []:
     PG_PRODUTOS: pagina_produtos,
     PG_ESTOQUE: pagina_estoque,
     PG_FINANCEIRO: pagina_financeiro,
+    PG_INVEST: pagina_investimento,
     PG_CONFIG: pagina_config,
 }[st.session_state.pagina]()

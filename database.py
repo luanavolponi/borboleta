@@ -22,6 +22,12 @@ CATEGORIAS_SAIDA = [
     "Filamento", "Insumos", "Embalagem", "Equipamentos", "Manutenção", "Energia",
     "Frete", "Marketing", "Taxas/Marketplace", "Juros e tarifas", "Impostos (MEI)", "Pró-labore", "Outros",
 ]
+# Analise de investimento: depois da 1a venda, so estas categorias contam como investimento
+CATEGORIAS_INVESTIMENTO = ["Equipamentos"]
+# Custos que existem mesmo sem vender (base do ponto de equilibrio)
+CATEGORIAS_FIXAS = ["Energia", "Marketing", "Impostos (MEI)", "Pró-labore", "Manutenção", "Juros e tarifas", "Outros"]
+# Entradas que sao receita do negocio (aporte dos socios nao e faturamento)
+CATEGORIAS_RECEITA = ["Venda", "Outros"]
 
 CONFIG_PADRAO = {
     "custo_kwh": 0.95,           # R$ por kWh (conta de luz)
@@ -31,6 +37,8 @@ CONFIG_PADRAO = {
     "taxa_venda": 0.0,           # % de taxa da maquininha/marketplace
     "preco_kg_simples": 115.0,   # R$/kg p/ filamentos simples, definido pela Luana (0 = media automatica)
     "preco_kg_especial": 150.0,  # R$/kg p/ filamentos especiais, definido pela Luana (0 = media automatica)
+    "custos_fixos_mensais": 0.0, # R$/mes p/ ponto de equilibrio (0 = media das despesas fixas dos ultimos 3 meses)
+    "inicio_vendas": 0.0,        # data (ordinal) que separa investimento inicial de operacao (0 = 1a venda)
 }
 
 
@@ -817,3 +825,128 @@ def aplicar_importacao(dados, usuario="Importação"):
         c.execute("INSERT INTO importacoes(id, quando, resumo) VALUES (?,?,?)",
                   (dados["id"], datetime.now().strftime("%Y-%m-%d %H:%M"), resumo))
         return resumo
+
+
+# ---------------------------------------------------------------- analise de investimento
+
+def _mes_seguinte(ym):
+    y, m = int(ym[:4]), int(ym[5:7])
+    return f"{y + (m == 12):04d}-{1 if m == 12 else m + 1:02d}"
+
+
+def inicio_vendas(cfg=None):
+    """Data que separa a montagem do estudio (investimento) da operacao.
+
+    Valor fixo das Configuracoes, se houver; senao a data da 1a venda (pedido valido ou
+    recebimento). None = ainda nao houve venda (tudo ate agora e investimento).
+    """
+    cfg = cfg or get_config()
+    if (cfg.get("inicio_vendas") or 0) > 0:
+        return date.fromordinal(int(cfg["inicio_vendas"]))
+    with _conn() as c:
+        r = c.execute("""SELECT MIN(d) FROM (
+                             SELECT MIN(data) AS d FROM pedidos WHERE status NOT IN ('Orçamento', 'Cancelado')
+                             UNION ALL
+                             SELECT MIN(data) FROM lancamentos WHERE tipo='entrada' AND categoria='Venda')""").fetchone()
+    return date.fromisoformat(r[0][:10]) if r and r[0] else None
+
+
+def analise_investimento(cfg=None):
+    """Numeros da aba de investimento: investido, faturamento, lucro, ponto de equilibrio e payback."""
+    cfg = cfg or get_config()
+    inicio = inicio_vendas(cfg)
+    hoje = date.today()
+    mes_atual = hoje.strftime("%Y-%m")
+    with _conn() as c:
+        lancs = _rows(c.execute("""SELECT l.*, COALESCE(cp.data_compra, l.data) AS data_ref,
+                                          cp.descricao AS compra_desc
+                                   FROM lancamentos l LEFT JOIN compras_parceladas cp ON cp.id = l.parcelamento_id"""))
+    pedidos = [p for p in listar_pedidos() if p["status"] not in ("Orçamento", "Cancelado")]
+
+    def eh_investimento(l):
+        if l["tipo"] != "saida":
+            return False
+        if l["categoria"] in CATEGORIAS_INVESTIMENTO:
+            return True
+        return inicio is None or l["data_ref"][:10] < inicio.isoformat()
+
+    # Investimento agrupado por compra (parcelas da mesma compra viram 1 linha)
+    compras = {}
+    for l in lancs:
+        if not eh_investimento(l):
+            continue
+        chave = ("p", l["parcelamento_id"]) if l["parcelamento_id"] else ("l", l["id"])
+        item = compras.setdefault(chave, {"descricao": l["compra_desc"] or l["descricao"], "categoria": l["categoria"],
+                                          "data": l["data_ref"][:10], "valor": 0.0, "pago": 0.0})
+        item["valor"] += l["valor"]
+        if l["pago"]:
+            item["pago"] += l["valor"]
+    itens_invest = sorted(compras.values(), key=lambda x: x["data"])
+    investido = sum(i["valor"] for i in itens_invest)
+    investido_pago = sum(i["pago"] for i in itens_invest)
+    por_categoria = {}
+    for i in itens_invest:
+        por_categoria[i["categoria"]] = por_categoria.get(i["categoria"], 0) + i["valor"]
+
+    # Linha do tempo mensal (ate o mes atual)
+    meses_mov = [l["data"][:7] for l in lancs] + [l["data_ref"][:7] for l in lancs] + [p["data"][:7] for p in pedidos]
+    meses = []
+    if meses_mov:
+        m = min(meses_mov)
+        while m <= mes_atual:
+            meses.append(m)
+            m = _mes_seguinte(m)
+    linhas = []
+    acum_lucro = acum_invest = acum_fat = 0.0
+    for m in meses:
+        faturamento = sum(p["total"] for p in pedidos if p["data"][:7] == m)
+        receita = sum(l["valor"] for l in lancs if l["tipo"] == "entrada" and l["categoria"] in CATEGORIAS_RECEITA
+                      and l["data"][:7] == m)
+        desp_oper = sum(l["valor"] for l in lancs if l["tipo"] == "saida" and not eh_investimento(l)
+                        and l["data"][:7] == m)
+        fixos = sum(l["valor"] for l in lancs if l["tipo"] == "saida" and not eh_investimento(l)
+                    and l["categoria"] in CATEGORIAS_FIXAS and l["data"][:7] == m)
+        invest = sum(l["valor"] for l in lancs if eh_investimento(l) and l["data_ref"][:7] == m)
+        acum_lucro += receita - desp_oper
+        acum_invest += invest
+        acum_fat += faturamento
+        linhas.append({"mes": m, "faturamento": faturamento, "recebido": receita, "despesas": desp_oper,
+                       "fixos": fixos, "lucro": receita - desp_oper, "investimento": invest,
+                       "lucro_acumulado": acum_lucro, "saldo": acum_lucro - acum_invest})
+
+    # Meses de operacao (a partir da 1a venda) para as medias
+    operando = [x for x in linhas if inicio and x["mes"] >= inicio.strftime("%Y-%m")]
+    ultimos = operando[-3:]
+    lucro_medio = sum(x["lucro"] for x in ultimos) / len(ultimos) if ultimos else 0.0
+    fat_medio = sum(x["faturamento"] for x in ultimos) / len(ultimos) if ultimos else 0.0
+    fixos_auto = sum(x["fixos"] for x in ultimos) / len(ultimos) if ultimos else 0.0
+    fixos = cfg.get("custos_fixos_mensais") or fixos_auto
+
+    # Margem de contribuicao: realizada nos pedidos ou, sem vendas, a da precificacao padrao
+    receita_ped = sum(p["subtotal"] - (p["desconto"] or 0) for p in pedidos)
+    custo_ped = sum(p["custo"] for p in pedidos)
+    taxa = (cfg.get("taxa_venda") or 0) / 100
+    if receita_ped > 0:
+        mc = max((receita_ped - custo_ped) / receita_ped - taxa, 0.0)
+        mc_origem = "pedidos vendidos"
+    else:
+        mg = (cfg.get("margem_padrao") or 0) / 100
+        mc = (1 - taxa) * mg / (1 + mg) if mg > 0 else 0.0
+        mc_origem = "margem padrão da precificação"
+    ticket = receita_ped / len(pedidos) if pedidos else 0.0
+
+    falta = investido - acum_lucro
+    payback_meses = falta / lucro_medio if lucro_medio > 0 and falta > 0 else None
+    return {
+        "inicio": inicio, "investido": investido, "investido_pago": investido_pago,
+        "investido_a_pagar": investido - investido_pago, "por_categoria": por_categoria,
+        "itens_investimento": itens_invest, "meses": linhas,
+        "faturamento_total": acum_fat, "lucro_acumulado": acum_lucro,
+        "retorno_pct": (acum_lucro / investido * 100) if investido else 0.0,
+        "lucro_medio": lucro_medio, "faturamento_medio": fat_medio, "meses_operando": len(operando),
+        "custos_fixos": fixos, "custos_fixos_auto": fixos_auto, "custos_fixos_fixo": bool(cfg.get("custos_fixos_mensais")),
+        "margem_contribuicao": mc, "mc_origem": mc_origem, "ticket_medio": ticket, "n_pedidos": len(pedidos),
+        "ponto_equilibrio": fixos / mc if mc > 0 else None,
+        "falta_recuperar": max(falta, 0.0), "payback_meses": payback_meses,
+        "pago_de_volta": investido > 0 and falta <= 0,
+    }
