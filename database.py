@@ -828,6 +828,11 @@ def aplicar_importacao(dados, usuario="Importação"):
                 _mover(c, "insumo", cur.lastrowid, i["quantidade"], "Estoque inicial (importação)")
             n_ins += 1
 
+        for aj in dados.get("ajustes_data_compra", []):
+            # Completa a data da compra de lancamentos antigos (anteriores a coluna data_compra)
+            c.execute("UPDATE lancamentos SET data_compra=? WHERE descricao=? AND data_compra IS NULL",
+                      (aj["data_compra"], aj["descricao"]))
+
         for fx in dados.get("despesas_fixas", []):
             if c.execute("SELECT 1 FROM despesas_fixas WHERE lower(descricao)=lower(?)", (fx["descricao"],)).fetchone():
                 pulados += 1
