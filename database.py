@@ -1043,8 +1043,12 @@ def atualizar_despesa_fixa(fixa_id, dados):
     with _conn() as c:
         antes = c.execute("SELECT ativo, inicio FROM despesas_fixas WHERE id=?", (fixa_id,)).fetchone()
         if antes and not antes["ativo"] and campos.get("ativo"):
-            # Reativada: recomeca neste mes, sem lancar os meses em que ficou parada
+            # Reativada: recomeca neste mes, sem lancar os meses em que ficou parada; os meses a partir
+            # de agora cujas contas foram apagadas na desativacao voltam a ser gerados
             campos["inicio"] = max(antes["inicio"][:7], mes_atual)
+            c.execute("""DELETE FROM despesas_fixas_geradas WHERE fixa_id=? AND mes >= ? AND NOT EXISTS (
+                             SELECT 1 FROM lancamentos l WHERE l.fixa_id=despesas_fixas_geradas.fixa_id
+                             AND substr(l.data, 1, 7)=despesas_fixas_geradas.mes)""", (fixa_id, mes_atual))
         c.execute(f"UPDATE despesas_fixas SET {', '.join(k + '=?' for k in campos)} WHERE id=?",
                   list(campos.values()) + [fixa_id])
         fx = dict(c.execute("SELECT * FROM despesas_fixas WHERE id=?", (fixa_id,)).fetchone())
