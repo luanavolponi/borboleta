@@ -25,7 +25,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.8 · 11/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.9 · 13/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -184,6 +184,15 @@ if is_cloud() and "importacao_feita" not in st.session_state:
         st.session_state["importacao_msgs"] = importar_pendentes(db.aplicar_importacao)
     except Exception as _e:
         print(f"[IMPORTACAO] erro: {_e}", flush=True)
+
+# --- Despesas fixas: lanca os meses que faltam (ate o mes que vem), uma vez por sessao ---
+if "fixas_geradas" not in st.session_state:
+    st.session_state.fixas_geradas = True
+    try:
+        if db.gerar_despesas_fixas() and is_cloud():
+            push_database()
+    except Exception as _e:
+        print(f"[FIXAS] erro: {_e}", flush=True)
 
 if "acesso_logado" not in st.session_state:
     st.session_state.acesso_logado = True
@@ -1328,13 +1337,16 @@ def situacao_vencimento(data_iso, pago):
 
 def pagina_financeiro():
     titulo("💰 Financeiro")
-    tab_mes, tab_parc, tab_pagar = st.tabs(["📅 Movimento do mês", "💳 Compras parceladas", "📌 Contas a pagar"])
+    tab_mes, tab_parc, tab_pagar, tab_fixas = st.tabs(
+        ["📅 Movimento do mês", "💳 Compras parceladas", "📌 Contas a pagar", "🔁 Despesas fixas"])
     with tab_mes:
         aba_movimento_mes()
     with tab_parc:
         aba_compras_parceladas()
     with tab_pagar:
         aba_contas_a_pagar()
+    with tab_fixas:
+        aba_despesas_fixas()
 
 
 def aba_movimento_mes():
@@ -1395,6 +1407,8 @@ def aba_movimento_mes():
             return f"Pedido #{l['pedido_id']}"
         if l["parcelamento_id"]:
             return f"Parcela {l['parcela_num']}/{l['parcela_total']}"
+        if l.get("fixa_id"):
+            return "Despesa fixa"
         return "Manual"
 
     df = pd.DataFrame([{
@@ -1625,6 +1639,79 @@ def aba_contas_a_pagar():
     st.plotly_chart(layout_grafico(fig, 300), key="graf_a_pagar")
 
 
+def aba_despesas_fixas():
+    st.caption("Contas que se repetem todo mês: DAS do MEI, internet, assinaturas... O app lança cada uma sozinho, "
+               "como **a pagar**, até o mês que vem. É só marcar como paga em 📌 Contas a pagar. A soma delas vira "
+               "os custos fixos do ponto de equilíbrio em 📈 Investimento.")
+    fixas = db.listar_despesas_fixas()
+    ativas = [f for f in fixas if f["ativo"]]
+    linha_cards([
+        ("Despesas fixas ativas", str(len(ativas)), AZUL, f"{len(fixas) - len(ativas)} desativada(s)"),
+        ("Total por mês", brl(sum(f["valor"] for f in ativas)), VERMELHO, "custos fixos"),
+    ])
+
+    atual = date.today().strftime("%Y-%m")
+    meses_opc = list(reversed(lista_meses(13)))
+    m = atual
+    for _ in range(12):
+        m = db._mes_seguinte(m)
+        meses_opc.append(m)
+    with st.expander("➕ Cadastrar despesa fixa", expanded=not fixas):
+        with st.form("form_fixa", clear_on_submit=True):
+            f1, f2, f3 = st.columns([2, 1, 1])
+            desc = f1.text_input("Descrição *", placeholder="Ex.: DAS MEI, Internet, Canva Pro")
+            cat = f2.selectbox("Categoria", db.CATEGORIAS_SAIDA, index=db.CATEGORIAS_SAIDA.index("Impostos (MEI)"))
+            valor = f3.number_input("Valor por mês (R$)", min_value=0.0, step=1.0)
+            f4, f5, f6 = st.columns(3)
+            dia = f4.number_input("Dia do vencimento", min_value=1, max_value=31, step=1, value=20)
+            inicio = f5.selectbox("Primeiro vencimento em", meses_opc, index=meses_opc.index(atual),
+                                  format_func=mes_label,
+                                  help="Meses anteriores ao atual também são lançados (como a pagar).")
+            forma = f6.selectbox("Forma de pagamento", db.FORMAS_PAGAMENTO,
+                                 index=db.FORMAS_PAGAMENTO.index("Boleto"))
+            if st.form_submit_button("Cadastrar", type="primary"):
+                if not desc.strip() or valor <= 0:
+                    st.error("Preencha a descrição e o valor.")
+                else:
+                    n = db.inserir_despesa_fixa(desc.strip(), cat, valor, dia, inicio, forma, USUARIO)
+                    salvo(f"{desc.strip()} cadastrada · {n} mês(es) lançado(s)")
+                    st.rerun()
+
+    if not fixas:
+        return
+    df = pd.DataFrame([{
+        "id": f["id"], "Descrição": f["descricao"], "Categoria": f["categoria"], "Valor": f["valor"],
+        "Dia": int(f["dia_vencimento"] or 1), "Forma": f["forma_pagamento"] or "",
+        "Desde": mes_label(f["inicio"][:7]), "Ativa": bool(f["ativo"]), "Excluir?": False,
+    } for f in fixas])
+    edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"fixas_editor_{ev()}",
+                          disabled=["Desde"],
+                          column_config={
+                              "id": None,
+                              "Categoria": st.column_config.SelectboxColumn(options=db.CATEGORIAS_SAIDA,
+                                                                            required=True),
+                              "Valor": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
+                              "Dia": st.column_config.NumberColumn(min_value=1, max_value=31, step=1, format="%d"),
+                              "Forma": st.column_config.SelectboxColumn(options=db.FORMAS_PAGAMENTO),
+                          })
+    st.caption("Mudar valor ou dia atualiza as contas ainda não pagas deste mês em diante. Desativar ou excluir "
+               "apaga as que ainda não foram pagas; as pagas continuam no histórico.")
+    if st.button("💾 Salvar despesas fixas", type="primary", key="fixas_salvar"):
+        for _, r in edit.iterrows():
+            fid = int(r["id"])
+            if _bool(r["Excluir?"]):
+                db.excluir_despesa_fixa(fid)
+                continue
+            db.atualizar_despesa_fixa(fid, {
+                "descricao": _txt(r["Descrição"]) or "Despesa fixa", "categoria": _txt(r["Categoria"]) or "Outros",
+                "valor": abs(_num(r["Valor"])), "dia_vencimento": int(_num(r["Dia"], 1) or 1),
+                "forma_pagamento": _txt(r["Forma"]), "ativo": 1 if _bool(r["Ativa"]) else 0,
+            })
+        db.gerar_despesas_fixas()
+        salvo("Despesas fixas salvas!")
+        st.rerun()
+
+
 # =====================================================================
 # 📈 Investimento
 # =====================================================================
@@ -1687,7 +1774,7 @@ def pagina_investimento():
   ({a['mc_origem']}).
 - **Ponto de equilíbrio:** custos fixos do mês ÷ margem de contribuição = quanto precisam vender por mês para não
   ter prejuízo. Custos fixos usados: **{brl(a['custos_fixos'])}/mês**
-  ({'valor definido nas Premissas' if a['custos_fixos_fixo'] else 'média das despesas fixas dos últimos 3 meses'}).
+  ({a['custos_fixos_origem']}).
 - **Payback:** (total investido − lucro acumulado) ÷ lucro médio dos últimos 3 meses = meses para o negócio
   devolver o que foi investido.
 """)

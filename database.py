@@ -178,6 +178,22 @@ def init_db():
             forma_pagamento TEXT DEFAULT '',
             criado_por TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS despesas_fixas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            descricao TEXT NOT NULL,
+            categoria TEXT DEFAULT 'Outros',
+            valor REAL NOT NULL,
+            dia_vencimento INTEGER DEFAULT 10,
+            forma_pagamento TEXT DEFAULT '',
+            inicio TEXT NOT NULL,              -- 1o mes de vencimento (YYYY-MM)
+            ativo INTEGER DEFAULT 1,
+            criado_por TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS despesas_fixas_geradas (
+            fixa_id INTEGER NOT NULL,
+            mes TEXT NOT NULL,                 -- YYYY-MM ja lancado (mesmo que depois excluido)
+            PRIMARY KEY (fixa_id, mes)
+        );
         CREATE TABLE IF NOT EXISTS importacoes (
             id TEXT PRIMARY KEY,
             quando TEXT,
@@ -197,7 +213,8 @@ def init_db():
         cols = {r["name"] for r in c.execute("PRAGMA table_info(lancamentos)")}
         for col, tipo in [("pago", "INTEGER DEFAULT 1"), ("parcelamento_id", "INTEGER"),
                           ("parcela_num", "INTEGER"), ("parcela_total", "INTEGER"),
-                          ("data_compra", "TEXT")]:  # data em que a despesa foi feita (data = vencimento)
+                          ("data_compra", "TEXT"),  # data em que a despesa foi feita (data = vencimento)
+                          ("fixa_id", "INTEGER")]:  # lancamento gerado por uma despesa fixa mensal
             if col not in cols:
                 c.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {tipo}")
         for k, v in CONFIG_PADRAO.items():
@@ -752,7 +769,7 @@ def saldo_caixa():
 def exportar_tabelas():
     """Todas as tabelas como {nome: lista de dicts} (para o Excel)."""
     nomes = ["clientes", "pedidos", "pedido_itens", "produtos", "filamentos", "insumos",
-             "impressoras", "lancamentos", "compras_parceladas", "movimentos", "config"]
+             "impressoras", "lancamentos", "compras_parceladas", "despesas_fixas", "movimentos", "config"]
     with _conn() as c:
         return {n: _rows(c.execute(f"SELECT * FROM {n}")) for n in nomes}
 
@@ -811,6 +828,16 @@ def aplicar_importacao(dados, usuario="Importação"):
                 _mover(c, "insumo", cur.lastrowid, i["quantidade"], "Estoque inicial (importação)")
             n_ins += 1
 
+        for fx in dados.get("despesas_fixas", []):
+            if c.execute("SELECT 1 FROM despesas_fixas WHERE lower(descricao)=lower(?)", (fx["descricao"],)).fetchone():
+                pulados += 1
+                continue
+            c.execute("""INSERT INTO despesas_fixas(descricao, categoria, valor, dia_vencimento, forma_pagamento,
+                         inicio, ativo, criado_por) VALUES (?,?,?,?,?,?,1,?)""",
+                      (fx["descricao"], fx.get("categoria", "Outros"), fx["valor"], fx.get("dia_vencimento", 10),
+                       fx.get("forma_pagamento", ""), fx["inicio"], usuario))
+            n_desp += 1
+
         for m in dados.get("impressoras", []):
             if c.execute("SELECT 1 FROM impressoras WHERE lower(nome)=lower(?)", (m["nome"],)).fetchone():
                 pulados += 1
@@ -820,7 +847,7 @@ def aplicar_importacao(dados, usuario="Importação"):
                       (m["nome"], m.get("potencia_w", 150), m.get("valor_compra", 0), m.get("vida_util_horas", 5000)))
             n_imp += 1
 
-        resumo = (f"Importado: {n_desp} compra(s) no Financeiro, {n_fil} filamento(s), {n_ins} insumo(s)"
+        resumo = (f"Importado: {n_desp} despesa(s) no Financeiro, {n_fil} filamento(s), {n_ins} insumo(s)"
                   f" e {n_imp} impressora(s)"
                   + (f" · {pulados} item(ns) já existiam e foram pulados" if pulados else ""))
         c.execute("INSERT INTO importacoes(id, quando, resumo) VALUES (?,?,?)",
@@ -921,7 +948,14 @@ def analise_investimento(cfg=None):
     lucro_medio = sum(x["lucro"] for x in ultimos) / len(ultimos) if ultimos else 0.0
     fat_medio = sum(x["faturamento"] for x in ultimos) / len(ultimos) if ultimos else 0.0
     fixos_auto = sum(x["fixos"] for x in ultimos) / len(ultimos) if ultimos else 0.0
-    fixos = cfg.get("custos_fixos_mensais") or fixos_auto
+    with _conn() as c:
+        soma_fixas = c.execute("SELECT COALESCE(SUM(valor), 0) FROM despesas_fixas WHERE ativo=1").fetchone()[0]
+    if cfg.get("custos_fixos_mensais"):
+        fixos, fixos_origem = cfg["custos_fixos_mensais"], "valor definido nas Premissas"
+    elif soma_fixas:
+        fixos, fixos_origem = soma_fixas, "soma das despesas fixas cadastradas"
+    else:
+        fixos, fixos_origem = fixos_auto, "média das despesas fixas dos últimos 3 meses"
 
     # Margem de contribuicao: realizada nos pedidos ou, sem vendas, a da precificacao padrao
     receita_ped = sum(p["subtotal"] - (p["desconto"] or 0) for p in pedidos)
@@ -945,9 +979,93 @@ def analise_investimento(cfg=None):
         "faturamento_total": acum_fat, "lucro_acumulado": acum_lucro,
         "retorno_pct": (acum_lucro / investido * 100) if investido else 0.0,
         "lucro_medio": lucro_medio, "faturamento_medio": fat_medio, "meses_operando": len(operando),
-        "custos_fixos": fixos, "custos_fixos_auto": fixos_auto, "custos_fixos_fixo": bool(cfg.get("custos_fixos_mensais")),
+        "custos_fixos": fixos, "custos_fixos_auto": fixos_auto, "custos_fixos_origem": fixos_origem,
         "margem_contribuicao": mc, "mc_origem": mc_origem, "ticket_medio": ticket, "n_pedidos": len(pedidos),
         "ponto_equilibrio": fixos / mc if mc > 0 else None,
         "falta_recuperar": max(falta, 0.0), "payback_meses": payback_meses,
         "pago_de_volta": investido > 0 and falta <= 0,
     }
+
+
+# ---------------------------------------------------------------- despesas fixas (mensais)
+
+def _venc_no_mes(ym, dia):
+    y, m = int(ym[:4]), int(ym[5:7])
+    return date(y, m, min(int(dia or 1), calendar.monthrange(y, m)[1]))
+
+
+def listar_despesas_fixas():
+    with _conn() as c:
+        return _rows(c.execute("SELECT * FROM despesas_fixas ORDER BY ativo DESC, descricao COLLATE NOCASE"))
+
+
+def inserir_despesa_fixa(descricao, categoria, valor, dia_vencimento, inicio, forma_pagamento="", usuario=""):
+    with _conn() as c:
+        c.execute("""INSERT INTO despesas_fixas(descricao, categoria, valor, dia_vencimento, forma_pagamento, inicio,
+                     ativo, criado_por) VALUES (?,?,?,?,?,?,1,?)""",
+                  (descricao, categoria, float(valor), int(dia_vencimento), forma_pagamento, inicio, usuario))
+    return gerar_despesas_fixas()
+
+
+def gerar_despesas_fixas():
+    """Lanca cada despesa fixa ativa em todos os meses desde o inicio ate o mes que vem.
+
+    Cada mes so e gerado uma vez (despesas_fixas_geradas): se um lancamento for excluido a mao,
+    ele nao volta. Os lancamentos nascem 'a pagar'. Retorna quantos foram criados.
+    """
+    ate = _mes_seguinte(_hoje()[:7])
+    criados = 0
+    with _conn() as c:
+        for fx in _rows(c.execute("SELECT * FROM despesas_fixas WHERE ativo=1")):
+            mes = fx["inicio"][:7]
+            while mes <= ate:
+                if not c.execute("SELECT 1 FROM despesas_fixas_geradas WHERE fixa_id=? AND mes=?",
+                                 (fx["id"], mes)).fetchone():
+                    venc = _venc_no_mes(mes, fx["dia_vencimento"]).isoformat()
+                    c.execute("""INSERT INTO lancamentos(data, tipo, categoria, descricao, valor, forma_pagamento,
+                                 criado_por, pago, data_compra, fixa_id)
+                                 VALUES (?, 'saida', ?, ?, ?, ?, 'Despesa fixa', 0, ?, ?)""",
+                              (venc, fx["categoria"], f"{fx['descricao']} ({mes[5:7]}/{mes[:4]})", fx["valor"],
+                               fx["forma_pagamento"] or "", venc, fx["id"]))
+                    c.execute("INSERT INTO despesas_fixas_geradas(fixa_id, mes) VALUES (?, ?)", (fx["id"], mes))
+                    criados += 1
+                mes = _mes_seguinte(mes)
+    return criados
+
+
+def atualizar_despesa_fixa(fixa_id, dados):
+    """Atualiza a despesa fixa e as parcelas dela ainda nao pagas (a partir deste mes)."""
+    campos = {k: v for k, v in dados.items()
+              if k in ("descricao", "categoria", "valor", "dia_vencimento", "forma_pagamento", "ativo")}
+    if not campos:
+        return
+    mes_atual = _hoje()[:7]
+    with _conn() as c:
+        antes = c.execute("SELECT ativo, inicio FROM despesas_fixas WHERE id=?", (fixa_id,)).fetchone()
+        if antes and not antes["ativo"] and campos.get("ativo"):
+            # Reativada: recomeca neste mes, sem lancar os meses em que ficou parada
+            campos["inicio"] = max(antes["inicio"][:7], mes_atual)
+        c.execute(f"UPDATE despesas_fixas SET {', '.join(k + '=?' for k in campos)} WHERE id=?",
+                  list(campos.values()) + [fixa_id])
+        fx = dict(c.execute("SELECT * FROM despesas_fixas WHERE id=?", (fixa_id,)).fetchone())
+        abertos = _rows(c.execute("""SELECT id, data FROM lancamentos WHERE fixa_id=? AND COALESCE(pago, 1)=0
+                                     AND substr(data, 1, 7) >= ?""", (fixa_id, mes_atual)))
+        for l in abertos:
+            if not fx["ativo"]:
+                c.execute("DELETE FROM lancamentos WHERE id=?", (l["id"],))
+                continue
+            mes = l["data"][:7]
+            venc = _venc_no_mes(mes, fx["dia_vencimento"]).isoformat()
+            c.execute("""UPDATE lancamentos SET valor=?, categoria=?, forma_pagamento=?, data=?, data_compra=?,
+                         descricao=? WHERE id=?""",
+                      (fx["valor"], fx["categoria"], fx["forma_pagamento"] or "", venc, venc,
+                       f"{fx['descricao']} ({mes[5:7]}/{mes[:4]})", l["id"]))
+
+
+def excluir_despesa_fixa(fixa_id):
+    """Remove a despesa fixa e as parcelas dela ainda nao pagas deste mes em diante (o historico pago fica)."""
+    with _conn() as c:
+        c.execute("""DELETE FROM lancamentos WHERE fixa_id=? AND COALESCE(pago, 1)=0
+                     AND substr(data, 1, 7) >= ?""", (fixa_id, _hoje()[:7]))
+        c.execute("DELETE FROM despesas_fixas_geradas WHERE fixa_id=?", (fixa_id,))
+        c.execute("DELETE FROM despesas_fixas WHERE id=?", (fixa_id,))
