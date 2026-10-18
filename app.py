@@ -25,7 +25,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.10 · 17/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.11 · 17/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -595,6 +595,10 @@ def pagina_pedidos():
     pid = opcoes[escolha]
     pedido, itens = db.obter_pedido(pid) if pid else ({}, [])
     st.markdown(f"#### {'✏️ Editando pedido #' + str(pid) if pid else '➕ Novo pedido'}")
+    if pedido.get("cliente_id"):
+        end_cli = db.endereco_formatado(db.obter("clientes", pedido["cliente_id"]))
+        st.caption(f"📍 Entrega: {end_cli}" if end_cli
+                   else "📍 Esse cliente não tem endereço cadastrado (dá para incluir em 👥 Clientes).")
 
     cfg = db.get_config()
     clientes = db.listar("clientes")
@@ -773,9 +777,18 @@ def pagina_clientes():
             nome = c1.text_input("Nome *")
             telefone = c2.text_input("WhatsApp / telefone")
             instagram = c3.text_input("Instagram")
-            c4, c5 = st.columns(2)
-            email = c4.text_input("E-mail")
-            cidade = c5.text_input("Cidade")
+            email = st.text_input("E-mail")
+            st.markdown("**📍 Endereço** (para entregas e envios)")
+            e1, e2, e3 = st.columns([1, 3, 1])
+            cep = e1.text_input("CEP", placeholder="00000-000")
+            endereco = e2.text_input("Rua / avenida")
+            numero = e3.text_input("Número")
+            e4, e5 = st.columns(2)
+            complemento = e4.text_input("Complemento", placeholder="apto, bloco, referência...")
+            bairro = e5.text_input("Bairro")
+            e6, e7 = st.columns([3, 1])
+            cidade = e6.text_input("Cidade")
+            uf = e7.selectbox("Estado", db.UFS)
             obs = st.text_input("Observações (preferências, aniversário...)")
             if st.form_submit_button("Cadastrar", type="primary"):
                 if not nome.strip():
@@ -783,7 +796,10 @@ def pagina_clientes():
                 else:
                     db.inserir("clientes", {"nome": nome.strip(), "telefone": telefone.strip(),
                                             "instagram": instagram.strip(), "email": email.strip(),
-                                            "cidade": cidade.strip(), "obs": obs.strip()})
+                                            "cep": cep.strip(), "endereco": endereco.strip(),
+                                            "numero": numero.strip(), "complemento": complemento.strip(),
+                                            "bairro": bairro.strip(), "cidade": cidade.strip(), "uf": uf,
+                                            "obs": obs.strip()})
                     salvo(f"{nome.strip()} cadastrado(a)!")
                     st.rerun()
 
@@ -800,30 +816,38 @@ def pagina_clientes():
         s["total"] += p["total"]
         s["ultimo"] = max(s["ultimo"], p["data"])
 
-    busca = st.text_input("🔎 Buscar cliente", placeholder="nome, telefone ou Instagram")
+    busca = st.text_input("🔎 Buscar cliente", placeholder="nome, telefone, Instagram, bairro ou cidade")
     termo = busca.strip().lower()
     if termo:
         clientes = [c for c in clientes if termo in " ".join(
-            [c["nome"], c["telefone"] or "", c["instagram"] or ""]).lower()]
+            [c["nome"], c["telefone"] or "", c["instagram"] or "", c.get("bairro") or "",
+             c["cidade"] or ""]).lower()]
 
+    colunas = ["id", "Nome", "WhatsApp", "Instagram", "E-mail", "CEP", "Rua", "Número", "Complemento", "Bairro",
+               "Cidade", "UF", "Obs", "Pedidos", "Total comprado", "Último pedido", "Excluir?"]
     df = pd.DataFrame([{
         "id": c["id"], "Nome": c["nome"], "WhatsApp": c["telefone"] or "", "Instagram": c["instagram"] or "",
-        "E-mail": c["email"] or "", "Cidade": c["cidade"] or "", "Obs": c["obs"] or "",
+        "E-mail": c["email"] or "", "CEP": c.get("cep") or "", "Rua": c.get("endereco") or "",
+        "Número": c.get("numero") or "", "Complemento": c.get("complemento") or "",
+        "Bairro": c.get("bairro") or "", "Cidade": c["cidade"] or "", "UF": c.get("uf") or "",
+        "Obs": c["obs"] or "",
         "Pedidos": stats.get(c["id"], {}).get("n", 0),
         "Total comprado": stats.get(c["id"], {}).get("total", 0.0),
         "Último pedido": fmt_data(stats.get(c["id"], {}).get("ultimo")),
         "Excluir?": False,
-    } for c in clientes], columns=["id", "Nome", "WhatsApp", "Instagram", "E-mail", "Cidade", "Obs", "Pedidos",
-                                   "Total comprado", "Último pedido", "Excluir?"])
-    st.caption("Edite direto na tabela e clique em **Salvar alterações**.")
+    } for c in clientes], columns=colunas)
+    st.caption("Edite direto na tabela (arraste para o lado para ver o endereço) e clique em **Salvar alterações**.")
     edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"cli_editor_{termo}_{ev()}",
                           disabled=["Pedidos", "Total comprado", "Último pedido"],
                           column_config={"id": None,
+                                         "UF": st.column_config.SelectboxColumn(options=db.UFS),
                                          "Total comprado": st.column_config.NumberColumn(format=DINHEIRO)})
     if st.button("💾 Salvar alterações", type="primary", key="cli_salvar"):
         alt, exc = aplicar_edicoes("clientes", edit, lambda r: {
             "nome": _txt(r["Nome"]) or "Sem nome", "telefone": _txt(r["WhatsApp"]),
-            "instagram": _txt(r["Instagram"]), "email": _txt(r["E-mail"]), "cidade": _txt(r["Cidade"]),
+            "instagram": _txt(r["Instagram"]), "email": _txt(r["E-mail"]), "cep": _txt(r["CEP"]),
+            "endereco": _txt(r["Rua"]), "numero": _txt(r["Número"]), "complemento": _txt(r["Complemento"]),
+            "bairro": _txt(r["Bairro"]), "cidade": _txt(r["Cidade"]), "uf": _txt(r["UF"]),
             "obs": _txt(r["Obs"])})
         salvo(f"Clientes salvos ({exc} excluído(s))" if exc else "Clientes salvos!")
         st.rerun()
@@ -833,6 +857,12 @@ def pagina_clientes():
     opts = {f"{c['nome']} (#{c['id']})": c["id"] for c in clientes}
     if opts:
         sel = st.selectbox("Cliente", list(opts), key="cli_hist")
+        end = db.endereco_formatado(db.obter("clientes", opts[sel]))
+        if end:
+            st.markdown("📍 **Endereço** (dá para copiar no ícone à direita):")
+            st.code(end, language=None)
+        else:
+            st.caption("📍 Sem endereço cadastrado.")
         hist = [p for p in db.listar_pedidos() if p["cliente_id"] == opts[sel]]
         if not hist:
             st.caption("Esse cliente ainda não tem pedidos.")

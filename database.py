@@ -207,7 +207,12 @@ def init_db():
         """)
         # Migracoes: colunas novas em bancos ja existentes
         for tabela, col, tipo in [("filamentos", "tipo", "TEXT DEFAULT 'Simples'"),
-                                  ("produtos", "tipo_filamento", "TEXT")]:
+                                  ("produtos", "tipo_filamento", "TEXT"),
+                                  # Endereco do cliente (cidade ja existia)
+                                  ("clientes", "cep", "TEXT DEFAULT ''"), ("clientes", "endereco", "TEXT DEFAULT ''"),
+                                  ("clientes", "numero", "TEXT DEFAULT ''"),
+                                  ("clientes", "complemento", "TEXT DEFAULT ''"),
+                                  ("clientes", "bairro", "TEXT DEFAULT ''"), ("clientes", "uf", "TEXT DEFAULT ''")]:
             if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")}:
                 c.execute(f"ALTER TABLE {tabela} ADD COLUMN {col} {tipo}")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(lancamentos)")}
@@ -257,7 +262,8 @@ _COLUNAS = {
     "produtos": ["nome", "categoria", "filamento_id", "impressora_id", "gramas", "horas_impressao",
                  "minutos_trabalho", "custo_extra", "margem_pct", "preco_venda", "estoque_pronto",
                  "estoque_minimo", "obs", "ativo", "tipo_filamento"],
-    "clientes": ["nome", "telefone", "instagram", "email", "cidade", "obs"],
+    "clientes": ["nome", "telefone", "instagram", "email", "cidade", "obs",
+                 "cep", "endereco", "numero", "complemento", "bairro", "uf"],
 }
 
 
@@ -305,6 +311,26 @@ def excluir(tabela, item_id):
     assert tabela in _COLUNAS
     with _conn() as c:
         c.execute(f"DELETE FROM {tabela} WHERE id = ?", (item_id,))
+
+
+UFS = ["", "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE",
+       "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"]
+
+
+def endereco_formatado(cli):
+    """'Rua X, 123 - apto 4 - Bairro - Cidade/UF - CEP 00000-000' (so com as partes preenchidas)."""
+    if not cli:
+        return ""
+    g = lambda k: (cli.get(k) or "").strip()  # noqa: E731
+    rua = ", ".join(p for p in (g("endereco"), g("numero")) if p)
+    cidade = "/".join(p for p in (g("cidade"), g("uf")) if p)
+    cep = re_digitos(g("cep"))
+    cep = f"CEP {cep[:5]}-{cep[5:]}" if len(cep) == 8 else (f"CEP {g('cep')}" if g("cep") else "")
+    return " - ".join(p for p in (rua, g("complemento"), g("bairro"), cidade, cep) if p)
+
+
+def re_digitos(texto):
+    return "".join(ch for ch in (texto or "") if ch.isdigit())
 
 
 def nome_filamento(f):
