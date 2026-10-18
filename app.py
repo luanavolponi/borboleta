@@ -26,7 +26,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.14 · 18/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.15 · 18/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -330,6 +330,22 @@ def opcoes_filamentos(apenas_ativos=True):
 
 def opcoes_impressoras(apenas_ativos=True):
     return {f"#{i['id']} {i['nome']}": i for i in db.listar("impressoras", apenas_ativos)}
+
+
+def opcoes_insumos(apenas_ativos=True):
+    return {f"{i['nome']} · {brl(i['custo_unit'] or 0)}/{i['unidade'] or 'un'} (#{i['id']})": i
+            for i in db.listar("insumos", apenas_ativos)}
+
+
+def itens_insumos(df, opcoes):
+    """Linhas de um editor 'Insumo / Qtd por peça' -> [(insumo, qtd)] (sem vazios; repetidos somados)."""
+    soma = {}
+    for _, r in df.iterrows():
+        ins = opcoes.get(_txt(r.get("Insumo")))
+        qtd = _num(r.get("Qtd por peça"))
+        if ins and qtd > 0:
+            soma[ins["id"]] = (ins, soma.get(ins["id"], (ins, 0))[1] + qtd)
+    return list(soma.values())
 
 
 def data_uri(jpeg):
@@ -931,8 +947,33 @@ def pagina_produtos():
             minutos = h2.number_input("e minutos", min_value=0, max_value=59, step=5, key="calc_m")
             min_trab = st.number_input("Seu trabalho manual por peça (minutos)", min_value=0.0, step=5.0,
                                        key="calc_trab", help="Tirar suporte, lixar, pintar, montar, embalar...")
-            extra = st.number_input("Extras por peça (R$)", min_value=0.0, step=0.5, key="calc_extra",
-                                    help="Embalagem, ímã, argola de chaveiro, tag, adesivo...")
+            st.markdown("**Extras de cada peça** (embalagem, argola, ímã, tag…)")
+            ins_opts = opcoes_insumos()
+            if ins_opts:
+                ed_ins = st.data_editor(
+                    pd.DataFrame({"Insumo": pd.Series([None], dtype="object"), "Qtd por peça": [1.0]}),
+                    num_rows="dynamic", hide_index=True, use_container_width=True, key=f"calc_insumos_{ev()}",
+                    column_config={
+                        "Insumo": st.column_config.SelectboxColumn(options=list(ins_opts), width="large",
+                                                                   help="Insumos cadastrados em 📦 Estoque"),
+                        "Qtd por peça": st.column_config.NumberColumn(min_value=0, step=1, format="%g"),
+                    })
+                itens_calc = itens_insumos(ed_ins, ins_opts)
+                custo_insumos = sum(i["custo_unit"] * q for i, q in itens_calc)
+                if itens_calc:
+                    st.caption("Insumos: " + " + ".join(f"{q:g}× {i['nome']} ({brl(i['custo_unit'] * q)})"
+                                                        for i, q in itens_calc)
+                               + f" = **{brl(custo_insumos)} por peça**")
+                    sem_custo = [i["nome"] for i, _ in itens_calc if not i["custo_unit"]]
+                    if sem_custo:
+                        st.warning("Sem custo cadastrado (conta como R$ 0): " + ", ".join(sem_custo)
+                                   + ". Preencha o “Custo un.” em 📦 Estoque → Insumos.")
+            else:
+                itens_calc, custo_insumos = [], 0.0
+                st.caption("Cadastre os insumos em 📦 Estoque → Insumos para escolher aqui.")
+            outros_extras = st.number_input("Outros extras por peça (R$)", min_value=0.0, step=0.5, key="calc_extra",
+                                            help="Algo que não está cadastrado no estoque.")
+            extra = custo_insumos + outros_extras
             m1, m2 = st.columns(2)
             margem = m1.number_input("Margem de lucro (%)", min_value=0.0, step=10.0,
                                      value=float(cfg["margem_padrao"]), key="calc_margem")
@@ -1001,9 +1042,10 @@ def pagina_produtos():
                             "nome": nome.strip(), "categoria": categoria.strip(), "tipo_filamento": tipo_fil,
                             "filamento_id": fil["id"] if fil else None, "impressora_id": imp["id"] if imp else None,
                             "gramas": gramas_un, "horas_impressao": horas_un, "minutos_trabalho": min_trab,
-                            "custo_extra": extra, "margem_pct": margem, "preco_venda": preco_final,
+                            "custo_extra": outros_extras, "margem_pct": margem, "preco_venda": preco_final,
                             "estoque_minimo": est_min, "ativo": 1,
                         })
+                        db.definir_insumos_produto(novo_id, [(i["id"], q) for i, q in itens_calc])
                         aviso_foto = ""
                         if foto_nova is not None:
                             try:
@@ -1045,6 +1087,7 @@ def pagina_produtos():
                         st.caption(p["categoria"])
             st.divider()
 
+        ins_prod = {p["id"]: db.insumos_do_produto(p["id"]) for p in produtos}
         linhas = []
         for p in produtos:
             c = db.custo_produto(p, cfg, medias)["total"]
@@ -1057,7 +1100,9 @@ def pagina_produtos():
                 "Filamento": rotulo_por_id(fils_todos, p["filamento_id"]),
                 "Impressora": rotulo_por_id(imps_todas, p["impressora_id"]),
                 "Gramas": p["gramas"] or 0.0, "Horas": p["horas_impressao"] or 0.0,
-                "Min. trabalho": p["minutos_trabalho"] or 0.0, "Extras": p["custo_extra"] or 0.0,
+                "Min. trabalho": p["minutos_trabalho"] or 0.0,
+                "Insumos": sum(i["subtotal"] for i in ins_prod.get(p["id"], [])),
+                "Outros extras": p["custo_extra"] or 0.0,
                 "Margem %": mg, "Preço venda": p["preco_venda"] or 0.0,
                 "Custo": c, "Sugerido": arredondar_preco(db.preco_sugerido(c, mg, cfg["taxa_venda"])),
                 "Lucro/peça": (p["preco_venda"] or 0) * (1 - cfg["taxa_venda"] / 100) - c,
@@ -1069,7 +1114,7 @@ def pagina_produtos():
                    "ao salvar. Desmarque **Ativo** para tirar um produto de linha sem perder o histórico.")
         edit = st.data_editor(
             df, hide_index=True, use_container_width=True, key=f"cat_editor_{ev()}",
-            disabled=["Foto", "Custo", "Sugerido", "Lucro/peça", "Prontas"],
+            disabled=["Foto", "Insumos", "Custo", "Sugerido", "Lucro/peça", "Prontas"],
             column_config={
                 "id": None,
                 "Foto": st.column_config.ImageColumn(width="small", help="Envie a foto logo abaixo da tabela"),
@@ -1081,7 +1126,9 @@ def pagina_produtos():
                 "Gramas": st.column_config.NumberColumn(format="%.0f g", min_value=0),
                 "Horas": st.column_config.NumberColumn(format="%.2f h", min_value=0),
                 "Min. trabalho": st.column_config.NumberColumn(format="%.0f min", min_value=0),
-                "Extras": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
+                "Insumos": st.column_config.NumberColumn(format=DINHEIRO,
+                                                         help="Soma dos insumos do produto (edite logo abaixo)"),
+                "Outros extras": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
                 "Margem %": st.column_config.NumberColumn(format="%.0f%%", min_value=0),
                 "Preço venda": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
                 "Custo": st.column_config.NumberColumn(format=DINHEIRO),
@@ -1096,7 +1143,7 @@ def pagina_produtos():
                         "tipo_filamento": _txt(r["Tipo"]) or "Simples",
                         "filamento_id": f["id"] if f else None, "impressora_id": i["id"] if i else None,
                         "gramas": _num(r["Gramas"]), "horas_impressao": _num(r["Horas"]),
-                        "minutos_trabalho": _num(r["Min. trabalho"]), "custo_extra": _num(r["Extras"]),
+                        "minutos_trabalho": _num(r["Min. trabalho"]), "custo_extra": _num(r["Outros extras"]),
                         "margem_pct": _num(r["Margem %"]), "preco_venda": _num(r["Preço venda"]),
                         "ativo": 1 if _bool(r["Ativo"]) else 0}
             aplicar_edicoes("produtos", edit, conv)
@@ -1106,6 +1153,41 @@ def pagina_produtos():
         prejuizo = [l["Produto"] for l in linhas if l["Lucro/peça"] < 0]
         if prejuizo:
             st.error("⚠️ Vendendo abaixo do custo: " + ", ".join(prejuizo))
+
+        # ---------- Insumos do produto
+        st.markdown("#### 🧰 Insumos de cada peça")
+        ins_opts_cat = opcoes_insumos(apenas_ativos=False)
+        if not produtos:
+            return
+        if not ins_opts_cat:
+            st.caption("Cadastre os insumos em 📦 Estoque → Insumos para ligar aos produtos.")
+        else:
+            opts_i = {f"{'🧰 ' if ins_prod.get(p['id']) else ''}{p['nome']} (#{p['id']})": p for p in produtos}
+            sel_i = st.selectbox("Produto", list(opts_i), key="ins_prod_sel",
+                                 help="Os que já têm insumos aparecem com 🧰 na frente.")
+            pi = opts_i[sel_i]
+            atuais = ins_prod.get(pi["id"], [])
+            rot_por_id = {i["id"]: k for k, i in ins_opts_cat.items()}
+            df_pi = pd.DataFrame({
+                "Insumo": pd.Series([rot_por_id.get(i["insumo_id"]) for i in atuais] or [None], dtype="object"),
+                "Qtd por peça": [float(i["qtd"]) for i in atuais] or [1.0],
+            })
+            ed_pi = st.data_editor(df_pi, num_rows="dynamic", hide_index=True, use_container_width=True,
+                                   key=f"ins_prod_editor_{pi['id']}_{ev()}",
+                                   column_config={
+                                       "Insumo": st.column_config.SelectboxColumn(options=list(ins_opts_cat),
+                                                                                  width="large"),
+                                       "Qtd por peça": st.column_config.NumberColumn(min_value=0, step=1,
+                                                                                     format="%g"),
+                                   })
+            novos = itens_insumos(ed_pi, ins_opts_cat)
+            st.caption(f"Total de insumos por peça: **{brl(sum(i['custo_unit'] * q for i, q in novos))}**. "
+                       "Para tirar um insumo, apague a linha (ou zere a quantidade). Ao registrar produção, "
+                       "esses insumos saem do estoque.")
+            if st.button("💾 Salvar insumos do produto", type="primary", key=f"ins_prod_salvar_{pi['id']}"):
+                db.definir_insumos_produto(pi["id"], [(i["id"], q) for i, q in novos])
+                salvo(f"Insumos de {pi['nome']} salvos!")
+                st.rerun()
 
         # ---------- Foto do produto
         st.markdown("#### 📷 Foto do produto")
@@ -1355,9 +1437,9 @@ def pagina_estoque():
 
     # ---------- Pecas prontas
     with tab_prod:
-        st.caption("Peças do catálogo já impressas, prontas para vender. Ao registrar uma produção, o filamento "
-                   "é descontado. Ao entregar um pedido, as peças saem daqui (e se faltar, o filamento é "
-                   "descontado na hora).")
+        st.caption("Peças do catálogo já impressas, prontas para vender. Ao registrar uma produção, o filamento e os "
+                   "insumos do produto (embalagens...) são descontados. Ao entregar um pedido, as peças saem daqui "
+                   "(e se faltar, a produção é registrada na hora).")
         prods = db.listar("produtos", apenas_ativos=True)
         if not prods:
             st.info("Cadastre produtos em **🏷️ Produtos & Preços** primeiro.")

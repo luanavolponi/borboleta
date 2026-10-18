@@ -178,6 +178,12 @@ def init_db():
             forma_pagamento TEXT DEFAULT '',
             criado_por TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS produto_insumos (
+            produto_id INTEGER NOT NULL REFERENCES produtos(id) ON DELETE CASCADE,
+            insumo_id INTEGER NOT NULL REFERENCES insumos(id) ON DELETE CASCADE,
+            qtd REAL NOT NULL DEFAULT 1,       -- quanto vai em CADA peca
+            PRIMARY KEY (produto_id, insumo_id)
+        );
         CREATE TABLE IF NOT EXISTS produto_fotos (
             produto_id INTEGER PRIMARY KEY REFERENCES produtos(id) ON DELETE CASCADE,
             foto BLOB NOT NULL,                -- JPEG reduzido (~700 px)
@@ -408,11 +414,37 @@ def preco_sugerido(custo_total, margem_pct, taxa_venda_pct=0.0):
     return base / (1 - taxa)
 
 
+def insumos_do_produto(produto_id):
+    """Insumos usados em cada peca do produto, com custo atual: [{insumo_id, nome, unidade, custo_unit, qtd, subtotal}]"""
+    with _conn() as c:
+        itens = _rows(c.execute("""SELECT pi.insumo_id, pi.qtd, i.nome, i.unidade, COALESCE(i.custo_unit, 0) AS custo_unit
+                                   FROM produto_insumos pi JOIN insumos i ON i.id = pi.insumo_id
+                                   WHERE pi.produto_id=? ORDER BY i.nome COLLATE NOCASE""", (produto_id,)))
+    for it in itens:
+        it["subtotal"] = it["custo_unit"] * it["qtd"]
+    return itens
+
+
+def definir_insumos_produto(produto_id, itens):
+    """Troca a lista de insumos do produto. itens = [(insumo_id, qtd por peca)]; repetidos sao somados."""
+    soma = {}
+    for insumo_id, qtd in itens:
+        if insumo_id and (qtd or 0) > 0:
+            soma[int(insumo_id)] = soma.get(int(insumo_id), 0) + float(qtd)
+    with _conn() as c:
+        c.execute("DELETE FROM produto_insumos WHERE produto_id=?", (produto_id,))
+        c.executemany("INSERT INTO produto_insumos(produto_id, insumo_id, qtd) VALUES (?,?,?)",
+                      [(produto_id, i, q) for i, q in soma.items()])
+
+
 def custo_produto(produto, cfg=None, medias=None):
+    """Custo de 1 peca. Extras = insumos cadastrados do produto (preco atual) + 'outros extras' (custo_extra)."""
     fil = obter("filamentos", produto["filamento_id"]) if produto.get("filamento_id") else None
     imp = obter("impressoras", produto["impressora_id"]) if produto.get("impressora_id") else None
+    extras = (produto.get("custo_extra") or 0) + sum(i["subtotal"] for i in insumos_do_produto(produto["id"])) \
+        if produto.get("id") else (produto.get("custo_extra") or 0)
     return calcular_custo(produto.get("gramas"), produto.get("horas_impressao"),
-                          produto.get("minutos_trabalho"), produto.get("custo_extra"), fil, imp, cfg,
+                          produto.get("minutos_trabalho"), extras, fil, imp, cfg,
                           tipo_filamento=produto.get("tipo_filamento"), medias=medias)
 
 
@@ -455,12 +487,14 @@ def registrar_compra(tipo_item, item_id, qtd, valor_total, data, lancar_financei
 
 
 def registrar_producao(produto_id, qtd, motivo="Produção", pedido_id=None, c=None):
-    """Produz N unidades: baixa o filamento e soma no estoque de produtos prontos."""
+    """Produz N unidades: baixa o filamento e os insumos do produto e soma no estoque de produtos prontos."""
     def _fazer(c):
         p = dict(c.execute("SELECT * FROM produtos WHERE id=?", (produto_id,)).fetchone())
         if p.get("filamento_id") and (p.get("gramas") or 0) > 0:
             _mover(c, "filamento", p["filamento_id"], -p["gramas"] * qtd,
                    f"{motivo}: {qtd}x {p['nome']}", pedido_id)
+        for it in c.execute("SELECT insumo_id, qtd FROM produto_insumos WHERE produto_id=?", (produto_id,)).fetchall():
+            _mover(c, "insumo", it[0], -it[1] * qtd, f"{motivo}: {qtd}x {p['nome']}", pedido_id)
         _mover(c, "produto", produto_id, qtd, f"{motivo}: {qtd}x", pedido_id)
     if c is not None:
         _fazer(c)
