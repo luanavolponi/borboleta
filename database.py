@@ -860,6 +860,15 @@ def aplicar_importacao(dados, usuario="Importação"):
                 _mover(c, "insumo", cur.lastrowid, i["quantidade"], "Estoque inicial (importação)")
             n_ins += 1
 
+        for u in dados.get("atualizar_insumos", []):
+            # Atualiza campos de um insumo que ja existe (pelo nome), ex.: custo por unidade
+            campos = {k: u[k] for k in ("custo_unit", "estoque_minimo", "unidade") if k in u}
+            if campos:
+                cur = c.execute(f"UPDATE insumos SET {', '.join(k + '=?' for k in campos)} WHERE lower(nome)=lower(?)",
+                                list(campos.values()) + [u["nome"]])
+                if not cur.rowcount:
+                    pulados += 1
+
         for aj in dados.get("ajustes_data_compra", []):
             # Completa a data da compra de lancamentos antigos (anteriores a coluna data_compra)
             c.execute("UPDATE lancamentos SET data_compra=? WHERE descricao=? AND data_compra IS NULL",
