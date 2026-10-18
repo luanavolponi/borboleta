@@ -26,7 +26,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.15 · 18/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.16 · 18/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -169,7 +169,7 @@ if not check_password():
 
 # --- Sync: puxa dados mais recentes do GitHub (na nuvem) ---
 from sync import (pull_database, push_database, is_cloud, get_last_sync_status,  # noqa: E402
-                  importar_pendentes, diagnostico)
+                  importar_pendentes, diagnostico, tem_pendencia)
 
 if is_cloud() and "db_pulled" not in st.session_state:
     pull_database()
@@ -222,11 +222,15 @@ def salvo(msg="Salvo!"):
     st.session_state["ed_v"] = st.session_state.get("ed_v", 0) + 1
     if is_cloud():
         try:
-            if not push_database():
-                st.toast(f"Erro ao salvar na nuvem: {get_last_sync_status().get('msg', '?')}", icon="❌")
-                return
+            ok = push_database()
+            erro = None if ok else get_last_sync_status().get("msg", "?")
         except Exception as e:
-            st.toast(f"Erro ao salvar na nuvem: {e}", icon="❌")
+            erro = str(e)
+        if erro:
+            # Aviso fixo no topo da proxima tela (o balaozinho some rapido demais)
+            st.session_state["falha_nuvem"] = (f"⚠️ **{msg.rstrip('!')}**, mas **não foi para a nuvem** ({erro}). "
+                                               "Não feche o app: clique em **☁️ Tentar salvar agora** na barra lateral.")
+            st.toast(f"Erro ao salvar na nuvem: {erro}", icon="❌")
             return
     st.toast(msg, icon="✅")
 
@@ -417,6 +421,11 @@ with st.sidebar:
     st.divider()
     if is_cloud() and get_last_sync_status().get("ok") is False:
         st.error(f"☁️ {get_last_sync_status().get('msg')}")
+    if is_cloud() and tem_pendencia():
+        st.warning("☁️ Há alterações que ainda **não foram para a nuvem**.")
+        if st.button("☁️ Tentar salvar agora", key="retry_push", use_container_width=True):
+            salvo("Tudo salvo na nuvem!")
+            st.rerun()
     st.caption(f"Olá, {USUARIO}! · {SLOGAN}")
     st.caption(f"versão {VERSAO}")
     if st.button("Sair", key="logout", use_container_width=True):
@@ -2240,6 +2249,12 @@ def pagina_config():
 # =====================================================================
 # Roteamento
 # =====================================================================
+
+if "falha_nuvem" in st.session_state:
+    if is_cloud() and (tem_pendencia() or get_last_sync_status().get("ok") is False):
+        st.error(st.session_state["falha_nuvem"])
+    else:
+        st.session_state.pop("falha_nuvem")  # ja foi resolvido
 
 for _msg in st.session_state.pop("importacao_msgs", None) or []:
     (st.error if _msg.startswith("Erro") else st.success)(f"📥 {_msg}")

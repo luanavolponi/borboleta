@@ -20,7 +20,7 @@ _last_sync_status = {"ok": None, "msg": "", "detail": ""}
 
 # Trava de seguranca: so libera o push depois que o pull deu certo (ou se ainda nao
 # existe banco na nuvem). Evita sobrescrever os dados da nuvem com um banco vazio.
-_estado = {"push_liberado": False}
+_estado = {"push_liberado": False, "pendente": False}  # pendente = ha alteracao local que nao foi p/ a nuvem
 
 
 def _log(msg):
@@ -151,8 +151,31 @@ def _baixar_raw(url, token, timeout=120):
         return None
 
 
+def tem_pendencia():
+    """True se ha alteracoes salvas so no servidor, que ainda nao chegaram a nuvem."""
+    return bool(_estado.get("pendente"))
+
+
+def push_database():
+    """Envia o banco para o GitHub. Se falhar, marca a pendencia (o proximo pull nao apaga a alteracao)."""
+    ok = _push_database()
+    if ok:
+        _estado["pendente"] = False
+    elif _estado["push_liberado"]:
+        _estado["pendente"] = True
+    return ok
+
+
 def pull_database():
     """Baixa o banco de dados mais recente do GitHub (e guarda o motivo, se falhar)."""
+    if _estado.get("pendente") and os.path.exists(DB_PATH):
+        # O banco local tem alteracoes que nao subiram: baixar agora apagaria essas alteracoes
+        _log("Ha alteracoes locais pendentes: tentando enviar antes de baixar")
+        if push_database():
+            return True
+        _set_status(False, "Ha alteracoes que ainda nao foram salvas na nuvem",
+                    "O app tenta de novo a cada salvamento; use 'Tentar salvar agora' na barra lateral.")
+        return False
     ok = _pull_database()
     _estado["erro_pull"] = None if _estado["push_liberado"] else _last_sync_status.get("msg")
     return ok
@@ -189,9 +212,11 @@ def _pull_database():
     # Tentar download_url primeiro (mais confiavel para arquivos grandes)
     # NOTA: download_url e uma URL de CDN/redirect — NAO enviar Authorization header
     download_url = data.get("download_url", "")
-    db_bytes = None
+    # 1o pela API (sempre a versao mais nova). O download_url passa pelo CDN do GitHub, que pode
+    # entregar uma versao de alguns minutos atras e fazer o app perder alteracoes recentes.
+    db_bytes = _baixar_raw(url, token)
 
-    if download_url:
+    if not db_bytes and download_url:
         _log(f"Baixando via download_url (sem auth)...")
         try:
             req = urllib_request.Request(download_url)
@@ -232,7 +257,7 @@ def _pull_database():
     return True
 
 
-def push_database():
+def _push_database():
     """Envia o banco de dados atualizado para o GitHub."""
     _log("=== PUSH INICIANDO ===")
     if not _estado["push_liberado"]:
