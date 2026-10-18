@@ -98,11 +98,16 @@ def _get_config():
     return token, owner, repo
 
 
-def _github_api(method, url, token, data=None, timeout=60):
+# Para o arquivo do banco: o formato padrao da API so devolve arquivos de ate 1 MB (acima disso, erro 403).
+# O formato "object" funciona ate 100 MB (devolve sha e download_url; o conteudo vem vazio).
+ACCEPT_OBJETO = "application/vnd.github.object+json"
+
+
+def _github_api(method, url, token, data=None, timeout=60, accept="application/vnd.github.v3+json"):
     """Faz uma chamada a API do GitHub."""
     headers = {
         "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3+json",
+        "Accept": accept,
         "User-Agent": "BorboletaApp",
     }
     if data:
@@ -132,6 +137,20 @@ def _github_api(method, url, token, data=None, timeout=60):
         return 0, {"error": str(e)}
 
 
+def _baixar_raw(url, token, timeout=120):
+    """Baixa o conteudo bruto de um arquivo pela API (funciona para arquivos de 1 a 100 MB)."""
+    req = urllib_request.Request(url, headers={"Authorization": f"token {token}", "User-Agent": "BorboletaApp",
+                                               "Accept": "application/vnd.github.raw+json"})
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            dados = resp.read()
+        _log(f"Download raw OK: {len(dados)} bytes")
+        return dados
+    except Exception as e:
+        _log(f"Download raw falhou: {e}")
+        return None
+
+
 def pull_database():
     """Baixa o banco de dados mais recente do GitHub (e guarda o motivo, se falhar)."""
     ok = _pull_database()
@@ -147,7 +166,7 @@ def _pull_database():
 
     # Primeiro tenta pegar info do arquivo
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main"
-    status, data = _github_api("GET", url, token)
+    status, data = _github_api("GET", url, token, accept=ACCEPT_OBJETO)
 
     if status == 404:
         # 404 tambem acontece quando o token NAO enxerga o repositorio: conferir antes de liberar o push
@@ -191,6 +210,9 @@ def _pull_database():
             _log("Usando base64 do response da API...")
             db_bytes = base64.b64decode(content_b64.replace("\n", ""))
         else:
+            # Arquivo grande (> 1 MB): a API so manda o conteudo no formato "raw"
+            db_bytes = _baixar_raw(url, token)
+        if not db_bytes:
             _set_status(False, "Nenhum conteudo disponivel no GitHub")
             return False
 
@@ -238,7 +260,7 @@ def push_database():
 
     # Pegar o SHA atual do arquivo no GitHub (necessario para update)
     url_contents = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main"
-    status, data = _github_api("GET", url_contents, token)
+    status, data = _github_api("GET", url_contents, token, accept=ACCEPT_OBJETO)
 
     sha = None
     if status == 200:
@@ -314,7 +336,7 @@ def test_sync():
 
     # Testar leitura
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main"
-    status, data = _github_api("GET", url, token)
+    status, data = _github_api("GET", url, token, accept=ACCEPT_OBJETO)
     if status == 200:
         result["api_ok"] = True
         result["can_read"] = True
@@ -413,7 +435,7 @@ def diagnostico():
         return itens
 
     st_db, _ = _github_api("GET", f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main",
-                           token)
+                           token, accept=ACCEPT_OBJETO)
     itens.append((st_db in (200, 404), "Banco de dados já existe na nuvem" if st_db == 200
                   else ("Banco ainda não foi criado na nuvem (nada foi salvo até agora)" if st_db == 404
                         else f"Erro ao procurar o banco na nuvem ({st_db})")))

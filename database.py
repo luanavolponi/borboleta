@@ -178,6 +178,12 @@ def init_db():
             forma_pagamento TEXT DEFAULT '',
             criado_por TEXT DEFAULT ''
         );
+        CREATE TABLE IF NOT EXISTS produto_fotos (
+            produto_id INTEGER PRIMARY KEY REFERENCES produtos(id) ON DELETE CASCADE,
+            foto BLOB NOT NULL,                -- JPEG reduzido (~700 px)
+            miniatura BLOB NOT NULL,           -- JPEG ~160 px para tabelas
+            atualizado_em TEXT
+        );
         CREATE TABLE IF NOT EXISTS despesas_fixas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             descricao TEXT NOT NULL,
@@ -1104,3 +1110,57 @@ def excluir_despesa_fixa(fixa_id):
                      AND substr(data, 1, 7) >= ?""", (fixa_id, _hoje()[:7]))
         c.execute("DELETE FROM despesas_fixas_geradas WHERE fixa_id=?", (fixa_id,))
         c.execute("DELETE FROM despesas_fixas WHERE id=?", (fixa_id,))
+
+
+# ---------------------------------------------------------------- fotos dos produtos
+
+FOTO_LADO = 700       # px do maior lado da foto guardada
+MINIATURA_LADO = 160  # px da miniatura das tabelas
+
+
+def _jpeg(img, lado, qualidade):
+    import io
+    copia = img.copy()
+    copia.thumbnail((lado, lado))
+    buf = io.BytesIO()
+    copia.save(buf, format="JPEG", quality=qualidade, optimize=True)
+    return buf.getvalue()
+
+
+def salvar_foto_produto(produto_id, dados):
+    """Reduz a foto (corrige a rotacao do celular) e guarda foto + miniatura. Retorna o tamanho em KB."""
+    import io
+    from PIL import Image, ImageOps
+    img = Image.open(io.BytesIO(dados))
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "P"):
+        img = img.convert("RGBA")
+        fundo = Image.new("RGB", img.size, (255, 255, 255))  # transparencia vira fundo branco
+        fundo.paste(img, mask=img.split()[-1])
+        img = fundo
+    else:
+        img = img.convert("RGB")
+    foto = _jpeg(img, FOTO_LADO, 80)
+    mini = _jpeg(img, MINIATURA_LADO, 70)
+    with _conn() as c:
+        c.execute("""INSERT OR REPLACE INTO produto_fotos(produto_id, foto, miniatura, atualizado_em)
+                     VALUES (?,?,?,?)""",
+                  (produto_id, foto, mini, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    return round(len(foto) / 1024)
+
+
+def obter_foto(produto_id):
+    with _conn() as c:
+        r = c.execute("SELECT foto FROM produto_fotos WHERE produto_id=?", (produto_id,)).fetchone()
+    return bytes(r[0]) if r else None
+
+
+def miniaturas_produtos():
+    """{produto_id: bytes da miniatura}"""
+    with _conn() as c:
+        return {r[0]: bytes(r[1]) for r in c.execute("SELECT produto_id, miniatura FROM produto_fotos")}
+
+
+def remover_foto_produto(produto_id):
+    with _conn() as c:
+        c.execute("DELETE FROM produto_fotos WHERE produto_id=?", (produto_id,))

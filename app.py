@@ -3,6 +3,7 @@
 Borboleta Estudio Criativo — gestao da empresa (impressao 3D).
 Pedidos, clientes, produtos & precificacao, estoque e financeiro.
 """
+import base64
 import io
 import math
 import os
@@ -25,7 +26,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.12 · 17/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.13 · 17/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -329,6 +330,11 @@ def opcoes_filamentos(apenas_ativos=True):
 
 def opcoes_impressoras(apenas_ativos=True):
     return {f"#{i['id']} {i['nome']}": i for i in db.listar("impressoras", apenas_ativos)}
+
+
+def data_uri(jpeg):
+    """Imagem JPEG em bytes -> texto que a coluna de imagem da tabela entende."""
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode() if jpeg else None
 
 
 def rotulo_por_id(opcoes, item_id):
@@ -985,19 +991,28 @@ def pagina_produtos():
                                          ["— nenhum —"] + [k for k, f in fils.items()
                                                            if (f.get("tipo") or "Simples") == tipo_fil],
                                          help="Opcional. Não muda o custo, que usa a média do tipo.")
+                foto_nova = st.file_uploader("Foto do produto (opcional)", type=["jpg", "jpeg", "png", "webp"])
                 if st.form_submit_button("Salvar produto", type="primary"):
                     if not nome.strip():
                         st.error("Dê um nome ao produto.")
                     else:
                         fil = fils.get(fil_baixa)
-                        db.inserir("produtos", {
+                        novo_id = db.inserir("produtos", {
                             "nome": nome.strip(), "categoria": categoria.strip(), "tipo_filamento": tipo_fil,
                             "filamento_id": fil["id"] if fil else None, "impressora_id": imp["id"] if imp else None,
                             "gramas": gramas_un, "horas_impressao": horas_un, "minutos_trabalho": min_trab,
                             "custo_extra": extra, "margem_pct": margem, "preco_venda": preco_final,
                             "estoque_minimo": est_min, "ativo": 1,
                         })
-                        salvo(f"{nome.strip()} salvo no catálogo!")
+                        aviso_foto = ""
+                        if foto_nova is not None:
+                            try:
+                                db.salvar_foto_produto(novo_id, foto_nova.getvalue())
+                                aviso_foto = " com foto"
+                            except Exception as e:
+                                print(f"[FOTO] erro: {e}", flush=True)
+                                aviso_foto = " (a foto não abriu — envie de novo no Catálogo)"
+                        salvo(f"{nome.strip()} salvo no catálogo{aviso_foto}!")
                         st.rerun()
 
     with tab_cat:
@@ -1007,16 +1022,37 @@ def pagina_produtos():
             return
         fils_todos = opcoes_filamentos(apenas_ativos=False)
         imps_todas = opcoes_impressoras(apenas_ativos=False)
-        so_ativos = st.toggle("Mostrar só produtos ativos", value=True, key="cat_ativos")
+        t1, t2 = st.columns(2)
+        so_ativos = t1.toggle("Mostrar só produtos ativos", value=True, key="cat_ativos")
+        vitrine = t2.toggle("🖼️ Ver como vitrine (fotos e preços)", value=False, key="cat_vitrine")
         if so_ativos:
             produtos = [p for p in produtos if p["ativo"]]
+        minis = db.miniaturas_produtos()
+
+        if vitrine:
+            colunas_v = st.columns(4)
+            for i, p in enumerate(produtos):
+                with colunas_v[i % 4]:
+                    foto = db.obter_foto(p["id"])
+                    if foto:
+                        st.image(foto, use_container_width=True)
+                    else:
+                        st.markdown(f'<div style="aspect-ratio:1;background:{LAVANDA};border-radius:12px;display:flex;'
+                                    f'align-items:center;justify-content:center;color:{ROXO};font-size:.9em;">'
+                                    '📷 sem foto</div>', unsafe_allow_html=True)
+                    st.markdown(f"**{p['nome']}**  \n{brl(p['preco_venda'])}")
+                    if p["categoria"]:
+                        st.caption(p["categoria"])
+            st.divider()
+
         linhas = []
         for p in produtos:
             c = db.custo_produto(p, cfg, medias)["total"]
             fil_p = fils_todos.get(rotulo_por_id(fils_todos, p["filamento_id"]) or "") or {}
             mg = p["margem_pct"] if p["margem_pct"] is not None else cfg["margem_padrao"]
             linhas.append({
-                "id": p["id"], "Produto": p["nome"], "Categoria": p["categoria"] or "",
+                "id": p["id"], "Foto": data_uri(minis.get(p["id"])),
+                "Produto": p["nome"], "Categoria": p["categoria"] or "",
                 "Tipo": p["tipo_filamento"] or fil_p.get("tipo") or "Simples",
                 "Filamento": rotulo_por_id(fils_todos, p["filamento_id"]),
                 "Impressora": rotulo_por_id(imps_todas, p["impressora_id"]),
@@ -1033,9 +1069,10 @@ def pagina_produtos():
                    "ao salvar. Desmarque **Ativo** para tirar um produto de linha sem perder o histórico.")
         edit = st.data_editor(
             df, hide_index=True, use_container_width=True, key=f"cat_editor_{ev()}",
-            disabled=["Custo", "Sugerido", "Lucro/peça", "Prontas"],
+            disabled=["Foto", "Custo", "Sugerido", "Lucro/peça", "Prontas"],
             column_config={
                 "id": None,
+                "Foto": st.column_config.ImageColumn(width="small", help="Envie a foto logo abaixo da tabela"),
                 "Tipo": st.column_config.SelectboxColumn(options=db.TIPOS_FILAMENTO, required=True,
                                                          help="Define o preço médio do filamento no custo"),
                 "Filamento": st.column_config.SelectboxColumn(options=list(fils_todos),
@@ -1069,6 +1106,39 @@ def pagina_produtos():
         prejuizo = [l["Produto"] for l in linhas if l["Lucro/peça"] < 0]
         if prejuizo:
             st.error("⚠️ Vendendo abaixo do custo: " + ", ".join(prejuizo))
+
+        # ---------- Foto do produto
+        st.markdown("#### 📷 Foto do produto")
+        if not produtos:
+            return
+        opts_f = {f"{'📷 ' if p['id'] in minis else ''}{p['nome']} (#{p['id']})": p for p in produtos}
+        sel_f = st.selectbox("Produto", list(opts_f), key="foto_prod",
+                             help="Os que já têm foto aparecem com 📷 na frente.")
+        pf = opts_f[sel_f]
+        atual = db.obter_foto(pf["id"])
+        f1, f2 = st.columns([1, 2])
+        with f1:
+            if atual:
+                st.image(atual, caption="Foto atual", use_container_width=True)
+            else:
+                st.caption("Esse produto ainda não tem foto.")
+        with f2:
+            arq = st.file_uploader("Escolher foto (no celular dá para tirar na hora)", type=["jpg", "jpeg", "png", "webp"],
+                                   key=f"foto_up_{pf['id']}_{ev()}",
+                                   help="A foto é reduzida automaticamente para não pesar o app.")
+            if arq is not None and st.button("💾 Salvar foto", type="primary", key=f"foto_salvar_{pf['id']}"):
+                try:
+                    kb = db.salvar_foto_produto(pf["id"], arq.getvalue())
+                except Exception as e:
+                    print(f"[FOTO] erro: {e}", flush=True)
+                    st.error("Não consegui abrir essa imagem. Tente uma foto em JPG ou PNG.")
+                else:
+                    salvo(f"Foto de {pf['nome']} salva ({kb} KB)")
+                    st.rerun()
+            if atual and st.button("🗑️ Remover foto", key=f"foto_rm_{pf['id']}"):
+                db.remover_foto_produto(pf["id"])
+                salvo("Foto removida")
+                st.rerun()
 
 
 # =====================================================================
