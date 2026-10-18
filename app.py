@@ -25,7 +25,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.9 · 13/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.10 · 17/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -879,17 +879,22 @@ def pagina_produtos():
                        "(sem ela, a energia é calculada com 150 W).")
         col_in, col_out = st.columns([1, 1], gap="large")
         with col_in:
-            st.markdown("##### Dados da peça")
+            st.markdown("##### Dados da impressão")
             tipo_fil = st.radio("Filamento", db.TIPOS_FILAMENTO, format_func=rotulo_tipo, key="calc_tipo",
                                 help="O custo usa o preço MÉDIO por kg do tipo. Marque cada filamento como "
                                      "Simples ou Especial em 📦 Estoque; dá para fixar os valores em ⚙️ Configurações.")
             imp_label = st.selectbox("Impressora", list(imps) or ["Padrão (150 W)"], key="calc_imp")
-            gramas = st.number_input("Peso da peça (g) — o fatiador mostra", min_value=0.0, step=1.0, key="calc_g")
+            qtd_bandeja = st.number_input("Quantas peças saem nessa impressão (na bandeja)?", min_value=1, step=1,
+                                          value=1, key="calc_qtd",
+                                          help="Se imprimem várias de uma vez, o peso e o tempo da impressão "
+                                               "são divididos entre elas.")
+            gramas = st.number_input("Peso total da impressão (g) — o fatiador mostra", min_value=0.0, step=1.0,
+                                     key="calc_g", help="O peso de tudo que sai na bandeja, somado.")
             h1, h2 = st.columns(2)
-            horas = h1.number_input("Tempo de impressão: horas", min_value=0, step=1, key="calc_h")
+            horas = h1.number_input("Tempo total da impressão: horas", min_value=0, step=1, key="calc_h")
             minutos = h2.number_input("e minutos", min_value=0, max_value=59, step=5, key="calc_m")
-            min_trab = st.number_input("Seu trabalho manual (minutos)", min_value=0.0, step=5.0, key="calc_trab",
-                                       help="Tirar suporte, lixar, pintar, montar, embalar...")
+            min_trab = st.number_input("Seu trabalho manual por peça (minutos)", min_value=0.0, step=5.0,
+                                       key="calc_trab", help="Tirar suporte, lixar, pintar, montar, embalar...")
             extra = st.number_input("Extras por peça (R$)", min_value=0.0, step=0.5, key="calc_extra",
                                     help="Embalagem, ímã, argola de chaveiro, tag, adesivo...")
             m1, m2 = st.columns(2)
@@ -900,8 +905,12 @@ def pagina_produtos():
                                    help="Maquininha, Shopee, Elo7... o preço já embute essa taxa.")
 
         imp = imps.get(imp_label)
+        qtd_bandeja = int(qtd_bandeja)
         horas_total = horas + minutos / 60
-        custo = db.calcular_custo(gramas, horas_total, min_trab, extra, None, imp, cfg,
+        # Peso e tempo sao da bandeja inteira: cada peca leva a sua parte
+        gramas_un = gramas / qtd_bandeja
+        horas_un = horas_total / qtd_bandeja
+        custo = db.calcular_custo(gramas_un, horas_un, min_trab, extra, None, imp, cfg,
                                   tipo_filamento=tipo_fil, medias=medias)
         preco = db.preco_sugerido(custo["total"], margem, taxa)
         preco_r = arredondar_preco(preco)
@@ -912,6 +921,13 @@ def pagina_produtos():
             linha_cards([("Preço sugerido", brl(preco_r), ROXO, f"exato: {brl(preco)}"),
                          ("Custo", brl(custo["total"]), VERMELHO, ""),
                          ("Lucro", brl(lucro), VERDE, "já descontada a taxa")])
+            if qtd_bandeja > 1:
+                st.caption(f"Cada peça usa **{gramas_un:.1f} g** e **{horas_un * 60:.0f} min** de impressora "
+                           f"({qtd_bandeja} peças na bandeja).")
+                linha_cards([("Bandeja inteira: custo", brl(custo["total"] * qtd_bandeja), VERMELHO,
+                              f"{qtd_bandeja} peças"),
+                             ("Bandeja inteira: venda", brl(preco_r * qtd_bandeja), ROXO, "no preço sugerido"),
+                             ("Bandeja inteira: lucro", brl(lucro * qtd_bandeja), VERDE, "já descontada a taxa")])
             partes = {k: v for k, v in custo.items() if k != "total"}
             df_c = pd.DataFrame({"Parte do custo": list(partes), "Valor": list(partes.values())})
             df_c["%"] = (df_c["Valor"] / custo["total"] * 100).round(0) if custo["total"] else 0
@@ -942,7 +958,7 @@ def pagina_produtos():
                         db.inserir("produtos", {
                             "nome": nome.strip(), "categoria": categoria.strip(), "tipo_filamento": tipo_fil,
                             "filamento_id": fil["id"] if fil else None, "impressora_id": imp["id"] if imp else None,
-                            "gramas": gramas, "horas_impressao": horas_total, "minutos_trabalho": min_trab,
+                            "gramas": gramas_un, "horas_impressao": horas_un, "minutos_trabalho": min_trab,
                             "custo_extra": extra, "margem_pct": margem, "preco_venda": preco_final,
                             "estoque_minimo": est_min, "ativo": 1,
                         })
@@ -977,7 +993,8 @@ def pagina_produtos():
                 "Prontas": p["estoque_pronto"] or 0, "Ativo": bool(p["ativo"]), "Excluir?": False,
             })
         df = pd.DataFrame(linhas)
-        st.caption("Edite os dados e clique em **Salvar**. *Custo*, *Sugerido* e *Lucro/peça* são recalculados "
+        st.caption("Gramas e horas são **por peça** (a calculadora já divide a bandeja). "
+                   "Edite os dados e clique em **Salvar**. *Custo*, *Sugerido* e *Lucro/peça* são recalculados "
                    "ao salvar. Desmarque **Ativo** para tirar um produto de linha sem perder o histórico.")
         edit = st.data_editor(
             df, hide_index=True, use_container_width=True, key=f"cat_editor_{ev()}",
