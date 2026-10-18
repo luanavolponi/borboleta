@@ -25,7 +25,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.11 · 17/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.12 · 17/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -959,11 +959,16 @@ def pagina_produtos():
                              ("Bandeja inteira: venda", brl(preco_r * qtd_bandeja), ROXO, "no preço sugerido"),
                              ("Bandeja inteira: lucro", brl(lucro * qtd_bandeja), VERDE, "já descontada a taxa")])
             partes = {k: v for k, v in custo.items() if k != "total"}
-            df_c = pd.DataFrame({"Parte do custo": list(partes), "Valor": list(partes.values())})
-            df_c["%"] = (df_c["Valor"] / custo["total"] * 100).round(0) if custo["total"] else 0
-            st.dataframe(df_c, hide_index=True, use_container_width=True,
-                         column_config={"Valor": st.column_config.NumberColumn(format=DINHEIRO),
-                                        "%": st.column_config.NumberColumn(format="%.0f%%")})
+            partes["TOTAL"] = custo["total"]
+            df_c = pd.DataFrame({"Parte do custo": list(partes), "Por peça": list(partes.values())})
+            df_c["%"] = (df_c["Por peça"] / custo["total"] * 100).round(0) if custo["total"] else 0
+            col_bandeja = f"Bandeja ({qtd_bandeja} peças)"
+            formatos = {"Por peça": st.column_config.NumberColumn(format=DINHEIRO),
+                        "%": st.column_config.NumberColumn(format="%.0f%%")}
+            if qtd_bandeja > 1:
+                df_c[col_bandeja] = df_c["Por peça"] * qtd_bandeja
+                formatos[col_bandeja] = st.column_config.NumberColumn(format=DINHEIRO)
+            st.dataframe(df_c, hide_index=True, use_container_width=True, column_config=formatos)
             st.caption(f"Material inclui {cfg['taxa_falha']:.0f}% a mais para falhas/suportes. "
                        f"Energia a {brl(cfg['custo_kwh'])}/kWh. Mão de obra a {brl(cfg['hora_trabalho'])}/h. "
                        "Ajuste em ⚙️ Configurações.")
