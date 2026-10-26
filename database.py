@@ -555,12 +555,15 @@ def obter_pedido(pedido_id):
         return dict(p), itens
 
 
-def salvar_pedido(pedido, itens, pedido_id=None, usuario=""):
+def salvar_pedido(pedido, itens, pedido_id=None, usuario="", c=None, data_recebimento=None):
     """Cria/atualiza pedido + itens, sincroniza estoque e o recebimento no financeiro."""
+    if c is None:
+        with _conn() as c2:
+            return salvar_pedido(pedido, itens, pedido_id, usuario, c2, data_recebimento)
     campos = ["cliente_id", "data", "prazo", "status", "canal", "forma_pagamento",
               "desconto", "frete", "valor_recebido", "obs"]
     dados = [pedido.get(k) for k in campos]
-    with _conn() as c:
+    if True:  # mesmo bloco de antes, agora usando a conexao recebida
         if pedido_id:
             c.execute(f"UPDATE pedidos SET {', '.join(k + '=?' for k in campos)} WHERE id=?",
                       dados + [pedido_id])
@@ -576,7 +579,7 @@ def salvar_pedido(pedido, itens, pedido_id=None, usuario=""):
                        float(it.get("preco_unit") or 0), float(it.get("custo_unit") or 0),
                        it.get("filamento_id"), float(it.get("gramas_unit") or 0)))
         _sincronizar_estoque_pedido(c, pedido_id)
-        _sincronizar_recebimento(c, pedido_id, usuario)
+        _sincronizar_recebimento(c, pedido_id, usuario, data_recebimento)
     return pedido_id
 
 
@@ -630,7 +633,7 @@ def _sincronizar_estoque_pedido(c, pedido_id):
     c.execute("UPDATE pedidos SET estoque_baixado=1 WHERE id=?", (pedido_id,))
 
 
-def _sincronizar_recebimento(c, pedido_id, usuario=""):
+def _sincronizar_recebimento(c, pedido_id, usuario="", data_recebimento=None):
     """Mantem 1 lancamento de entrada (Venda) com o valor recebido do pedido."""
     p = dict(c.execute("""SELECT p.*, COALESCE(cl.nome, '') AS cliente FROM pedidos p
                           LEFT JOIN clientes cl ON cl.id = p.cliente_id WHERE p.id=?""",
@@ -647,7 +650,7 @@ def _sincronizar_recebimento(c, pedido_id, usuario=""):
     else:
         c.execute("""INSERT INTO lancamentos(data, tipo, categoria, descricao, valor, forma_pagamento,
                      pedido_id, criado_por) VALUES (?, 'entrada', 'Venda', ?, ?, ?, ?, ?)""",
-                  (_hoje(), desc, valor, p["forma_pagamento"] or "", pedido_id, usuario))
+                  (data_recebimento or _hoje(), desc, valor, p["forma_pagamento"] or "", pedido_id, usuario))
 
 
 def itens_vendidos(data_ini=None, data_fim=None):
@@ -927,8 +930,55 @@ def aplicar_importacao(dados, usuario="Importação"):
                       (m["nome"], m.get("potencia_w", 150), m.get("valor_compra", 0), m.get("vida_util_horas", 5000)))
             n_imp += 1
 
+        # Clientes (pulados se ja existe alguem com o mesmo nome)
+        n_cli = n_ped = 0
+        cli_cols = _COLUNAS["clientes"]
+        for cl in dados.get("clientes", []):
+            if c.execute("SELECT 1 FROM clientes WHERE lower(nome)=lower(?)", (cl["nome"],)).fetchone():
+                pulados += 1
+                continue
+            campos = {k: (cl.get(k) or "") for k in cli_cols}
+            c.execute(f"INSERT INTO clientes ({', '.join(campos)}, criado_em) VALUES ({', '.join('?' for _ in campos)}, ?)",
+                      list(campos.values()) + [_hoje()])
+            n_cli += 1
+
+        # Pedidos: cliente e produtos pelo nome; preco padrao = do catalogo; recebimento na data da venda
+        cfg_imp = get_config()
+        for pd_ in dados.get("pedidos", []):
+            cli = c.execute("SELECT id FROM clientes WHERE lower(nome)=lower(?)", (pd_.get("cliente") or "",)).fetchone()
+            cliente_id = cli[0] if cli else None
+            itens = []
+            for it in pd_.get("itens", []):
+                prod = c.execute("SELECT * FROM produtos WHERE lower(nome)=lower(?)", (it.get("produto") or "",)).fetchone()
+                prod = dict(prod) if prod else None
+                qtd = int(it.get("qtd") or 1)
+                if prod:
+                    itens.append({"produto_id": prod["id"], "descricao": it.get("descricao") or prod["nome"], "qtd": qtd,
+                                  "preco_unit": it.get("preco_unit", prod["preco_venda"] or 0),
+                                  "custo_unit": custo_produto(prod, cfg_imp)["total"],
+                                  "filamento_id": prod["filamento_id"], "gramas_unit": prod["gramas"] or 0})
+                else:
+                    itens.append({"produto_id": None, "descricao": it.get("descricao") or it.get("produto") or "Peça",
+                                  "qtd": qtd, "preco_unit": it.get("preco_unit", 0), "custo_unit": it.get("custo_unit", 0),
+                                  "filamento_id": None, "gramas_unit": 0})
+            subtotal = sum(i["qtd"] * i["preco_unit"] for i in itens)
+            ja = c.execute("""SELECT 1 FROM pedidos p WHERE COALESCE(p.cliente_id, 0)=? AND p.data=? AND ABS(
+                                  (SELECT COALESCE(SUM(qtd * preco_unit), 0) FROM pedido_itens WHERE pedido_id=p.id)
+                                  - ?) < 0.01""", (cliente_id or 0, pd_["data"], subtotal)).fetchone()
+            if ja or not itens:
+                pulados += 1
+                continue
+            total = subtotal - (pd_.get("desconto") or 0) + (pd_.get("frete") or 0)
+            recebido = total if pd_.get("pago_total") else (pd_.get("valor_recebido") or 0)
+            salvar_pedido({"cliente_id": cliente_id, "data": pd_["data"], "prazo": pd_.get("prazo"),
+                           "status": pd_.get("status") or "Entregue", "canal": pd_.get("canal") or "",
+                           "forma_pagamento": pd_.get("forma_pagamento") or "", "desconto": pd_.get("desconto") or 0,
+                           "frete": pd_.get("frete") or 0, "valor_recebido": recebido, "obs": pd_.get("obs") or ""},
+                          itens, usuario=usuario, c=c, data_recebimento=pd_.get("data_recebimento") or pd_["data"])
+            n_ped += 1
+
         resumo = (f"Importado: {n_desp} despesa(s) no Financeiro, {n_fil} filamento(s), {n_ins} insumo(s)"
-                  f" e {n_imp} impressora(s)"
+                  f", {n_imp} impressora(s), {n_cli} cliente(s) e {n_ped} pedido(s)"
                   + (f" · {pulados} item(ns) já existiam e foram pulados" if pulados else ""))
         c.execute("INSERT INTO importacoes(id, quando, resumo) VALUES (?,?,?)",
                   (dados["id"], datetime.now().strftime("%Y-%m-%d %H:%M"), resumo))
