@@ -4,6 +4,7 @@ Borboleta Estudio Criativo — gestao da empresa (impressao 3D).
 Pedidos, clientes, produtos & precificacao, estoque e financeiro.
 """
 import base64
+import html
 import io
 import math
 import os
@@ -27,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.19 · 28/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.20 · 28/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -361,13 +362,13 @@ def data_uri(jpeg):
     return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode() if jpeg else None
 
 
-# Caixa "colar imagem" (Ctrl+V / Colar no celular): componente proprio em componentes/colar_foto
+# Editor de foto (escolher, colar ou arrastar + recorte quadrado): componente proprio em componentes/colar_foto
 _colar_foto = components.declare_component("colar_foto", path=os.path.join(BASE_DIR, "componentes", "colar_foto"))
 
 
-def colar_foto(key):
-    """Mostra a caixa de colar imagem e devolve os bytes da imagem colada (ou None)."""
-    v = _colar_foto(key=key, default=None)
+def editor_foto(key, botao="💾 Salvar foto", texto_ok=""):
+    """Mostra o editor de foto e devolve os bytes do recorte quadrado confirmado (ou None)."""
+    v = _colar_foto(key=key, default=None, botao=botao, texto_ok=texto_ok)
     if isinstance(v, dict) and str(v.get("data", "")).startswith("data:image"):
         try:
             return base64.b64decode(v["data"].split(",", 1)[1])
@@ -1049,9 +1050,11 @@ def pagina_produtos():
                        "Ajuste em ⚙️ Configurações.")
 
             st.markdown("##### 💾 Salvar no catálogo")
-            st.caption("📷 Foto do produto (opcional): **cole a imagem aqui** ou envie o arquivo no formulário abaixo.")
+            st.caption("📷 Foto do produto (opcional): escolha ou cole, ajuste o recorte e clique em "
+                       "**✅ Usar esta foto**. Depois preencha os dados e clique em **Salvar produto**.")
             # Fora do formulario: componentes proprios nao funcionam dentro de st.form
-            foto_colada = colar_foto(key=f"calc_foto_colar_{ev()}")
+            foto_colada = editor_foto(key=f"calc_foto_{ev()}", botao="✅ Usar esta foto",
+                                      texto_ok="✅ Foto pronta! Agora clique em Salvar produto, logo abaixo.")
             with st.form("form_salvar_produto", clear_on_submit=True):
                 n1, n2 = st.columns(2)
                 nome = n1.text_input("Nome do produto *", placeholder="Ex.: Chaveiro borboleta")
@@ -1063,8 +1066,6 @@ def pagina_produtos():
                                          ["— nenhum —"] + [k for k, f in fils.items()
                                                            if (f.get("tipo") or "Simples") == tipo_fil],
                                          help="Opcional. Não muda o custo, que usa a média do tipo.")
-                foto_nova = st.file_uploader("Foto do produto (opcional)", type=["jpg", "jpeg", "png", "webp"],
-                                             help="Se você colou uma imagem na caixa acima, não precisa enviar aqui.")
                 if st.form_submit_button("Salvar produto", type="primary"):
                     if not nome.strip():
                         st.error("Dê um nome ao produto.")
@@ -1079,10 +1080,9 @@ def pagina_produtos():
                         })
                         db.definir_insumos_produto(novo_id, [(i["id"], q) for i, q in itens_calc])
                         aviso_foto = ""
-                        dados_foto = foto_nova.getvalue() if foto_nova is not None else foto_colada
-                        if dados_foto:
+                        if foto_colada:
                             try:
-                                db.salvar_foto_produto(novo_id, dados_foto)
+                                db.salvar_foto_produto(novo_id, foto_colada)
                                 aviso_foto = " com foto"
                             except Exception as e:
                                 print(f"[FOTO] erro: {e}", flush=True)
@@ -1105,19 +1105,27 @@ def pagina_produtos():
         minis = db.miniaturas_produtos()
 
         if vitrine:
-            colunas_v = st.columns(4)
-            for i, p in enumerate(produtos):
-                with colunas_v[i % 4]:
-                    foto = db.obter_foto(p["id"])
-                    if foto:
-                        st.image(foto, use_container_width=True)
-                    else:
-                        st.markdown(f'<div style="aspect-ratio:1;background:{LAVANDA};border-radius:12px;display:flex;'
-                                    f'align-items:center;justify-content:center;color:{ROXO};font-size:.9em;">'
-                                    '📷 sem foto</div>', unsafe_allow_html=True)
-                    st.markdown(f"**{p['nome']}**  \n{brl(p['preco_venda'])}")
-                    if p["categoria"]:
-                        st.caption(p["categoria"])
+            # Grade de quadrados pequenos, todos do mesmo tamanho (as fotos ja sao salvas quadradas)
+            cards = []
+            for p in produtos:
+                foto = db.obter_foto(p["id"])
+                img = (f'<img src="{data_uri(foto)}" alt="">' if foto
+                       else '<div class="vt-sem">📷<br>sem foto</div>')
+                cat = f'<small>{html.escape(p["categoria"])}</small>' if p["categoria"] else ""
+                cards.append(f'<div class="vt-card">{img}<b>{html.escape(p["nome"])}</b>'
+                             f'<span>{brl(p["preco_venda"])}</span>{cat}</div>')
+            css = (
+                f""".vt-grade {{display:grid; grid-template-columns:repeat(auto-fill, 150px); gap:16px; margin-bottom:8px;}}
+                .vt-card {{width:150px; font-size:.88em; line-height:1.25;}}
+                .vt-card img, .vt-sem {{width:150px; height:150px; object-fit:cover; border-radius:12px;
+                                        display:block; margin-bottom:6px; box-shadow:0 1px 4px rgba(25,10,118,.15);}}
+                .vt-sem {{background:{LAVANDA}; color:{ROXO}; display:flex; align-items:center; justify-content:center;
+                          text-align:center;}}
+                .vt-card b, .vt-card span, .vt-card small {{display:block;}}
+                .vt-card span {{color:{ROXO}; font-weight:600;}}
+                .vt-card small {{color:#6b6b8a;}}""")
+            css = " ".join(linha.strip() for linha in css.splitlines())  # sem recuo (markdown leria como codigo)
+            st.markdown(f'<style>{css}</style><div class="vt-grade">{"".join(cards)}</div>', unsafe_allow_html=True)
             st.divider()
 
         ins_prod = {p["id"]: db.insumos_do_produto(p["id"]) for p in produtos}
@@ -1234,19 +1242,17 @@ def pagina_produtos():
         f1, f2 = st.columns([1, 2])
         with f1:
             if atual:
-                st.image(atual, caption="Foto atual", use_container_width=True)
+                st.image(atual, caption="Foto atual", width=170)
             else:
                 st.caption("Esse produto ainda não tem foto.")
         with f2:
-            arq = st.file_uploader("Escolher foto (no celular dá para tirar na hora)", type=["jpg", "jpeg", "png", "webp"],
-                                   key=f"foto_up_{pf['id']}_{ev()}",
-                                   help="A foto é reduzida automaticamente para não pesar o app.")
-            st.caption("…ou copie a imagem e cole aqui:")
-            colada = colar_foto(key=f"foto_colar_{pf['id']}_{ev()}")
-            dados_foto = arq.getvalue() if arq is not None else colada
-            if dados_foto and st.button("💾 Salvar foto", type="primary", key=f"foto_salvar_{pf['id']}"):
+            st.caption("Escolha, cole ou arraste a foto, ajuste o recorte quadrado e clique em **💾 Salvar foto**.")
+            nova = editor_foto(key=f"foto_ed_{pf['id']}_{ev()}")
+            marca = f"{pf['id']}-{hash(nova)}" if nova else None
+            if nova and st.session_state.get("foto_ultima") != marca:  # cada recorte e salvo uma vez so
+                st.session_state["foto_ultima"] = marca
                 try:
-                    kb = db.salvar_foto_produto(pf["id"], dados_foto)
+                    kb = db.salvar_foto_produto(pf["id"], nova)
                 except Exception as e:
                     print(f"[FOTO] erro: {e}", flush=True)
                     st.error("Não consegui abrir essa imagem. Tente uma foto em JPG ou PNG.")

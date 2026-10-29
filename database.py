@@ -236,6 +236,9 @@ def init_db():
                 c.execute(f"ALTER TABLE lancamentos ADD COLUMN {col} {tipo}")
         for k, v in CONFIG_PADRAO.items():
             c.execute("INSERT OR IGNORE INTO config(chave, valor) VALUES (?, ?)", (k, v))
+        if not c.execute("SELECT 1 FROM config WHERE chave='fotos_quadradas'").fetchone():
+            _quadrar_fotos_antigas(c)  # 1x: fotos antigas viram quadradas (corte no centro)
+            c.execute("INSERT INTO config(chave, valor) VALUES ('fotos_quadradas', 1)")
 
 
 # ---------------------------------------------------------------- config
@@ -1207,7 +1210,7 @@ def excluir_despesa_fixa(fixa_id):
 
 # ---------------------------------------------------------------- fotos dos produtos
 
-FOTO_LADO = 700       # px do maior lado da foto guardada
+FOTO_LADO = 600       # px do lado da foto guardada (sempre quadrada)
 MINIATURA_LADO = 160  # px da miniatura das tabelas
 
 
@@ -1220,8 +1223,15 @@ def _jpeg(img, lado, qualidade):
     return buf.getvalue()
 
 
-def salvar_foto_produto(produto_id, dados):
-    """Reduz a foto (corrige a rotacao do celular) e guarda foto + miniatura. Retorna o tamanho em KB."""
+def _quadrado(img):
+    """Corta no centro para ficar quadrada (o editor do app ja manda quadrada; isto e para as outras)."""
+    w, h = img.size
+    lado = min(w, h)
+    return img.crop(((w - lado) // 2, (h - lado) // 2, (w - lado) // 2 + lado, (h - lado) // 2 + lado))
+
+
+def _preparar_foto(dados):
+    """Bytes de imagem -> (foto, miniatura) em JPEG quadrado, rotacao do celular corrigida, sem transparencia."""
     import io
     from PIL import Image, ImageOps
     img = Image.open(io.BytesIO(dados))
@@ -1233,8 +1243,22 @@ def salvar_foto_produto(produto_id, dados):
         img = fundo
     else:
         img = img.convert("RGB")
-    foto = _jpeg(img, FOTO_LADO, 80)
-    mini = _jpeg(img, MINIATURA_LADO, 70)
+    img = _quadrado(img)
+    return _jpeg(img, FOTO_LADO, 82), _jpeg(img, MINIATURA_LADO, 75)
+
+
+def _quadrar_fotos_antigas(c):
+    for pid, foto in c.execute("SELECT produto_id, foto FROM produto_fotos").fetchall():
+        try:
+            nova, mini = _preparar_foto(bytes(foto))
+            c.execute("UPDATE produto_fotos SET foto=?, miniatura=? WHERE produto_id=?", (nova, mini, pid))
+        except Exception as e:
+            print(f"[FOTO] nao consegui deixar quadrada a foto do produto {pid}: {e}", flush=True)
+
+
+def salvar_foto_produto(produto_id, dados):
+    """Guarda a foto quadrada + miniatura. Retorna o tamanho em KB."""
+    foto, mini = _preparar_foto(dados)
     with _conn() as c:
         c.execute("""INSERT OR REPLACE INTO produto_fotos(produto_id, foto, miniatura, atualizado_em)
                      VALUES (?,?,?,?)""",

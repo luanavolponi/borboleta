@@ -3,103 +3,228 @@
 <head>
 <meta charset="utf-8">
 <style>
-  html, body { margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }
+  html, body { margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; color: #190A76; }
+  .oculto { display: none !important; }
   #zona {
-    box-sizing: border-box; width: 100%; min-height: 76px; padding: 12px 14px;
-    border: 2px dashed #9428B3; border-radius: 10px; background: #EEEBFC; color: #190A76;
-    font-size: 15px; line-height: 1.4; cursor: text; outline: none; text-align: center;
-    display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
-    caret-color: transparent;
+    box-sizing: border-box; width: 100%; padding: 14px; border: 2px dashed #9428B3; border-radius: 10px;
+    background: #EEEBFC; text-align: center; font-size: 15px; line-height: 1.4; outline: none; caret-color: transparent;
   }
   #zona:focus { border-style: solid; box-shadow: 0 0 0 3px rgba(148, 40, 179, .25); }
-  #zona img { max-height: 90px; max-width: 140px; border-radius: 6px; }
   #zona small { color: #5a4fa0; }
-  #btn {
-    margin-top: 6px; width: 100%; padding: 7px; border-radius: 8px; border: 1px solid #c9c3e8;
-    background: #fff; color: #190A76; font-size: 14px; cursor: pointer;
+  .botoes { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+  button, label.botao {
+    padding: 7px 12px; border-radius: 8px; border: 1px solid #c9c3e8; background: #fff; color: #190A76;
+    font-size: 14px; cursor: pointer; font-family: inherit;
   }
-  #btn:hover { border-color: #9428B3; }
-  #msg { font-size: 13px; color: #FF5110; min-height: 0; margin-top: 4px; }
+  button:hover, label.botao:hover { border-color: #9428B3; }
+  button.principal { background: #9428B3; border-color: #9428B3; color: #fff; font-weight: 600; }
+  button.principal:hover { background: #7b1f96; }
+  #editor { text-align: center; }
+  #moldura { position: relative; display: inline-block; touch-action: none; cursor: grab; border-radius: 10px;
+             overflow: hidden; box-shadow: 0 0 0 2px #9428B3; background: #fff; }
+  #moldura:active { cursor: grabbing; }
+  #tela { display: block; }
+  #grade { position: absolute; inset: 0; pointer-events: none;
+           background-image: linear-gradient(rgba(255,255,255,.35) 1px, transparent 1px),
+                             linear-gradient(90deg, rgba(255,255,255,.35) 1px, transparent 1px);
+           background-size: 33.333% 33.333%; background-position: -1px -1px; }
+  .zoom { display: flex; align-items: center; gap: 8px; justify-content: center; margin: 8px auto 0; max-width: 300px; font-size: 14px; }
+  .zoom input { flex: 1; accent-color: #9428B3; }
+  #dica { font-size: 13px; color: #5a4fa0; margin-top: 4px; }
+  #msg { font-size: 13px; color: #FF5110; margin-top: 4px; }
+  #ok { font-size: 14px; color: #2e7d32; margin-top: 6px; font-weight: 600; }
 </style>
 </head>
 <body>
-<div id="zona" contenteditable="true" spellcheck="false" tabindex="0">
-  <span>📋 <b>Colar imagem</b><br><small>Clique aqui e aperte Ctrl+V · no celular, segure e toque em "Colar"</small></span>
+<input type="file" id="arquivo" accept="image/*" class="oculto">
+
+<div id="inicio">
+  <div id="zona" contenteditable="true" spellcheck="false" tabindex="0">
+    📷 <b>Foto do produto</b><br>
+    <small>Escolha um arquivo, arraste a imagem para cá, ou clique aqui e cole (Ctrl+V · no celular, segure e "Colar")</small>
+  </div>
+  <div class="botoes">
+    <label class="botao" for="arquivo">📁 Escolher foto</label>
+    <button type="button" id="colar">📋 Colar o que copiei</button>
+  </div>
 </div>
-<button id="btn" type="button">📋 Colar o que copiei</button>
+
+<div id="editor" class="oculto">
+  <div id="moldura"><canvas id="tela"></canvas><div id="grade"></div></div>
+  <div class="zoom"><span>➖</span><input type="range" id="zoom" min="0" max="1000" value="0"><span>➕</span></div>
+  <div id="dica">Arraste a foto para escolher o recorte · use o zoom para aproximar</div>
+  <div class="botoes">
+    <button type="button" class="principal" id="usar">💾 Salvar foto</button>
+    <label class="botao" for="arquivo">🔄 Trocar foto</label>
+    <button type="button" id="cancelar">✖ Cancelar</button>
+  </div>
+  <div id="ok"></div>
+</div>
 <div id="msg"></div>
+
 <script>
-  const zona = document.getElementById("zona");
-  const btn = document.getElementById("btn");
-  const msg = document.getElementById("msg");
+  const $ = (id) => document.getElementById(id);
+  const tela = $("tela"), ctx = tela.getContext("2d");
+  const SAIDA = 800;           // px do quadrado enviado (o app reduz para 600 ao salvar)
+  let img = null, V = 280;      // V = lado do quadrado na tela
+  let escalaMin = 1, escalaCobre = 1, escalaMax = 1, escala = 1, ox = 0, oy = 0;
+  let textoBotao = "💾 Salvar foto", textoOk = "";
 
   function enviar(tipo, dados) {
     window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: tipo }, dados || {}), "*");
   }
   function ajustarAltura() {
-    enviar("streamlit:setFrameHeight", { height: Math.ceil(document.body.getBoundingClientRect().height) + 4 });
+    enviar("streamlit:setFrameHeight", { height: Math.ceil(document.body.getBoundingClientRect().height) + 6 });
   }
-  function aviso(texto) { msg.textContent = texto || ""; ajustarAltura(); }
+  function aviso(t) { $("msg").textContent = t || ""; ajustarAltura(); }
 
-  // Reduz no navegador (lado maior 1600 px, JPEG) para nao pesar o envio; o app reduz de novo ao salvar
-  function processar(arquivo) {
-    if (!arquivo) { aviso("Não encontrei uma imagem para colar. Copie a foto (não o link) e tente de novo."); return; }
+  // ---- carregar imagem
+  function abrir(arquivo) {
+    if (!arquivo || !(arquivo.type || "").startsWith("image/")) {
+      aviso("Não encontrei uma imagem. Copie a foto (não o link) ou escolha um arquivo de imagem.");
+      return;
+    }
     const url = URL.createObjectURL(arquivo);
-    const img = new Image();
-    img.onload = () => {
-      const r = Math.min(1, 1600 / Math.max(img.width, img.height));
-      const w = Math.max(1, Math.round(img.width * r)), h = Math.max(1, Math.round(img.height * r));
-      const tela = document.createElement("canvas");
-      tela.width = w; tela.height = h;
-      const ctx = tela.getContext("2d");
-      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);  // transparencia vira fundo branco
-      ctx.drawImage(img, 0, 0, w, h);
-      const dados = tela.toDataURL("image/jpeg", 0.9);
-      URL.revokeObjectURL(url);
-      zona.innerHTML = "";
-      const mini = document.createElement("img");
-      mini.src = dados;
-      const txt = document.createElement("span");
-      txt.innerHTML = "✅ <b>Imagem colada</b><br><small>Para trocar, cole outra aqui</small>";
-      zona.append(mini, txt);
-      aviso("");
-      enviar("streamlit:setComponentValue", { value: { id: Date.now(), data: dados }, dataType: "json" });
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); aviso("Não consegui abrir essa imagem. Tente copiar de novo."); };
-    img.src = url;
+    const novo = new Image();
+    novo.onload = () => { img = novo; iniciarEditor(); };
+    novo.onerror = () => { URL.revokeObjectURL(url); aviso("Não consegui abrir essa imagem. Tente JPG ou PNG."); };
+    novo.src = url;
   }
-
   function imagemDe(dt) {
     if (!dt) return null;
-    for (const f of (dt.files || [])) if (f.type && f.type.startsWith("image/")) return f;
+    for (const f of (dt.files || [])) if ((f.type || "").startsWith("image/")) return f;
     for (const it of (dt.items || [])) if (it.kind === "file" && it.type.startsWith("image/")) return it.getAsFile();
     return null;
   }
 
-  zona.addEventListener("paste", (e) => { e.preventDefault(); processar(imagemDe(e.clipboardData)); });
-  zona.addEventListener("drop", (e) => { e.preventDefault(); processar(imagemDe(e.dataTransfer)); });
-  zona.addEventListener("dragover", (e) => e.preventDefault());
-  // A caixa so aceita colar: bloqueia digitacao e mantem o texto de ajuda
+  // ---- editor (quadrado com arrastar + zoom)
+  function iniciarEditor() {
+    V = Math.max(200, Math.min(300, document.body.clientWidth - 8));
+    const dpr = window.devicePixelRatio || 1;
+    tela.width = Math.round(V * dpr); tela.height = Math.round(V * dpr);
+    tela.style.width = V + "px"; tela.style.height = V + "px";
+    escalaCobre = Math.max(V / img.width, V / img.height);   // preenche o quadrado (corta sobras)
+    escalaMin = Math.min(V / img.width, V / img.height);     // mostra a foto inteira (faixas brancas)
+    escalaMax = escalaCobre * 4;
+    escala = escalaCobre;
+    definirEscala(escalaCobre, V / 2, V / 2, true);
+    $("inicio").classList.add("oculto");
+    $("editor").classList.remove("oculto");
+    $("ok").textContent = "";
+    aviso("");
+  }
+  function sliderDeEscala(s) { return Math.round(1000 * Math.log(s / escalaMin) / Math.log(escalaMax / escalaMin)); }
+  function escalaDeSlider(v) { return escalaMin * Math.pow(escalaMax / escalaMin, v / 1000); }
+  function limitar() {
+    const w = img.width * escala, h = img.height * escala;
+    ox = w <= V ? (V - w) / 2 : Math.min(0, Math.max(V - w, ox));
+    oy = h <= V ? (V - h) / 2 : Math.min(0, Math.max(V - h, oy));
+  }
+  // muda o zoom mantendo parado o ponto (cx, cy) da tela
+  function definirEscala(nova, cx, cy, centralizar) {
+    nova = Math.min(escalaMax, Math.max(escalaMin, nova));
+    if (centralizar) { ox = (V - img.width * nova) / 2; oy = (V - img.height * nova) / 2; }
+    else { ox = cx - (cx - ox) * (nova / escala); oy = cy - (cy - oy) * (nova / escala); }
+    escala = nova;
+    limitar();
+    $("zoom").value = sliderDeEscala(escala);
+    desenhar();
+  }
+  function desenhar() {
+    const k = tela.width / V;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, tela.width, tela.height);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, ox * k, oy * k, img.width * escala * k, img.height * escala * k);
+  }
+  function recorte() {
+    const c = document.createElement("canvas");
+    c.width = SAIDA; c.height = SAIDA;
+    const g = c.getContext("2d"), k = SAIDA / V;
+    g.fillStyle = "#fff"; g.fillRect(0, 0, SAIDA, SAIDA);
+    g.imageSmoothingQuality = "high";
+    g.drawImage(img, ox * k, oy * k, img.width * escala * k, img.height * escala * k);
+    return c.toDataURL("image/jpeg", 0.9);
+  }
+
+  // arrastar (mouse e dedo) e pinça com dois dedos
+  const toques = new Map();
+  let distInicial = 0, escalaInicial = 1;
+  const moldura = $("moldura");
+  moldura.addEventListener("pointerdown", (e) => {
+    moldura.setPointerCapture(e.pointerId);
+    toques.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (toques.size === 2) {
+      const [a, b] = [...toques.values()];
+      distInicial = Math.hypot(a.x - b.x, a.y - b.y); escalaInicial = escala;
+    }
+  });
+  moldura.addEventListener("pointermove", (e) => {
+    if (!toques.has(e.pointerId) || !img) return;
+    const antes = toques.get(e.pointerId);
+    toques.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (toques.size === 1) {
+      ox += e.clientX - antes.x; oy += e.clientY - antes.y; limitar(); desenhar();
+    } else if (toques.size === 2 && distInicial) {
+      const [a, b] = [...toques.values()];
+      const r = moldura.getBoundingClientRect();
+      definirEscala(escalaInicial * Math.hypot(a.x - b.x, a.y - b.y) / distInicial,
+                    (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
+    }
+  });
+  const soltar = (e) => { toques.delete(e.pointerId); if (toques.size < 2) distInicial = 0; };
+  moldura.addEventListener("pointerup", soltar);
+  moldura.addEventListener("pointercancel", soltar);
+  moldura.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const r = moldura.getBoundingClientRect();
+    definirEscala(escala * Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  $("zoom").addEventListener("input", (e) => definirEscala(escalaDeSlider(+e.target.value), V / 2, V / 2));
+
+  // ---- botoes
+  $("usar").addEventListener("click", () => {
+    enviar("streamlit:setComponentValue", { value: { id: Date.now(), data: recorte() }, dataType: "json" });
+    $("ok").textContent = textoOk;
+    ajustarAltura();
+  });
+  $("cancelar").addEventListener("click", () => {
+    img = null;
+    $("editor").classList.add("oculto"); $("inicio").classList.remove("oculto");
+    enviar("streamlit:setComponentValue", { value: null, dataType: "json" });
+    aviso("");
+  });
+  $("arquivo").addEventListener("change", (e) => { abrir(e.target.files[0]); e.target.value = ""; });
+  $("colar").addEventListener("click", async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.read) throw new Error("sem suporte");
+      for (const item of await navigator.clipboard.read()) {
+        const tipo = item.types.find((t) => t.startsWith("image/"));
+        if (tipo) { abrir(await item.getType(tipo)); return; }
+      }
+      aviso("Não há imagem copiada. Copie a foto e tente de novo.");
+    } catch (err) {
+      aviso("O navegador não deixou ler o que foi copiado. Clique na caixa roxa e use Ctrl+V.");
+    }
+  });
+
+  // colar e arrastar valem em qualquer parte (inclusive para trocar a foto no editor)
+  document.addEventListener("paste", (e) => { const f = imagemDe(e.clipboardData); if (f) { e.preventDefault(); abrir(f); } });
+  document.addEventListener("dragover", (e) => e.preventDefault());
+  document.addEventListener("drop", (e) => { e.preventDefault(); abrir(imagemDe(e.dataTransfer)); });
+  const zona = $("zona");
+  zona.addEventListener("paste", (e) => { e.preventDefault(); e.stopPropagation(); abrir(imagemDe(e.clipboardData)); });
   zona.addEventListener("beforeinput", (e) => { if (e.inputType !== "insertFromPaste") e.preventDefault(); });
   zona.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) && !["Tab", "Shift", "Control", "Meta"].includes(e.key)) e.preventDefault();
   });
 
-  btn.addEventListener("click", async () => {
-    try {
-      if (!navigator.clipboard || !navigator.clipboard.read) throw new Error("sem suporte");
-      for (const item of await navigator.clipboard.read()) {
-        const tipo = item.types.find((t) => t.startsWith("image/"));
-        if (tipo) { processar(await item.getType(tipo)); return; }
-      }
-      aviso("Não há imagem copiada. Copie a foto e tente de novo.");
-    } catch (err) {
-      aviso("O navegador não deixou ler o que foi copiado. Clique na caixa acima e use Ctrl+V.");
-    }
-  });
-
   window.addEventListener("message", (e) => {
-    if (e.data && e.data.type === "streamlit:render") ajustarAltura();
+    if (!e.data || e.data.type !== "streamlit:render") return;
+    const args = e.data.args || {};
+    if (args.botao && args.botao !== textoBotao) { textoBotao = args.botao; $("usar").textContent = textoBotao; }
+    textoOk = args.texto_ok || "";
+    ajustarAltura();
   });
   window.addEventListener("load", ajustarAltura);
   enviar("streamlit:componentReady", { apiVersion: 1 });
