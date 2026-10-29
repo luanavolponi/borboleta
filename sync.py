@@ -156,6 +156,94 @@ def tem_pendencia():
     return bool(_estado.get("pendente"))
 
 
+# Marca em disco com o SHA da versao da nuvem em que o banco local se baseia. Sobrevive quando o
+# app e atualizado com sessoes abertas (o modulo recarrega e _estado volta ao inicio, mas o
+# arquivo do banco continua no disco com alteracoes que talvez nao tenham subido).
+MARCA_PATH = DB_PATH + ".base_nuvem"
+
+
+def _gravar_marca(sha):
+    try:
+        if sha:
+            with open(MARCA_PATH, "w") as f:
+                f.write(sha)
+    except OSError as e:
+        _log(f"Nao gravei a marca da nuvem: {e}")
+
+
+def _ler_marca():
+    try:
+        with open(MARCA_PATH) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _local_cobre_nuvem(url, token):
+    """True se o banco local tem tudo o que esta na nuvem (enviar nao apagaria nada).
+
+    Confere tabela por tabela que o local tem pelo menos as linhas da nuvem e todas as cargas ja importadas.
+    """
+    import sqlite3
+    from contextlib import closing
+    nuvem = _baixar_raw(url, token)
+    if not nuvem or not os.path.exists(DB_PATH):
+        return False
+    tmp = DB_PATH + ".nuvem"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(nuvem)
+        with closing(sqlite3.connect(tmp)) as cn, closing(sqlite3.connect(DB_PATH)) as cl:
+            tabelas = [r[0] for r in cn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            for t in tabelas:
+                n_nuvem = cn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                n_local = cl.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+                if n_local < n_nuvem:
+                    _log(f"Banco local tem menos linhas em {t} ({n_local} < {n_nuvem}): nao libero")
+                    return False
+            if "importacoes" in tabelas:
+                ids_nuvem = {r[0] for r in cn.execute("SELECT id FROM importacoes")}
+                ids_local = {r[0] for r in cl.execute("SELECT id FROM importacoes")}
+                if not ids_nuvem <= ids_local:
+                    _log("Banco local nao tem todas as cargas da nuvem: nao libero")
+                    return False
+        return True
+    except Exception as e:
+        _log(f"Conferencia local x nuvem falhou: {e}")
+        return False
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _tentar_liberar(url, token):
+    """Libera o push sem novo pull quando e seguro: o banco local veio da versao atual da nuvem."""
+    status, data = _github_api("GET", url, token, accept=ACCEPT_OBJETO)
+    if status != 200:
+        return False
+    sha_nuvem = data.get("sha", "")
+    if sha_nuvem and _ler_marca() == sha_nuvem:
+        _log("Push liberado: banco local baseado na versao atual da nuvem (marca)")
+    elif _local_cobre_nuvem(url, token):
+        _log("Push liberado: banco local contem tudo o que esta na nuvem")
+    else:
+        return False
+    _estado["push_liberado"] = True
+    return True
+
+
+def reconectar():
+    """Se o app foi atualizado com a sessao aberta, tenta liberar e enviar o que ficou so no servidor (1x)."""
+    if _estado["push_liberado"] or _estado.get("reconexao_tentada") or not os.path.exists(DB_PATH):
+        return None
+    _estado["reconexao_tentada"] = True
+    _log("Sessao aberta sem pull neste processo: tentando reconectar")
+    return push_database()
+
+
 def push_database():
     """Envia o banco para o GitHub. Se falhar, marca a pendencia (o proximo pull nao apaga a alteracao)."""
     ok = _push_database()
@@ -254,20 +342,22 @@ def _pull_database():
     _log(f"Pull OK! {len(db_bytes)} bytes")
     _set_status(True, f"Pull OK ({len(db_bytes)} bytes)")
     _estado["push_liberado"] = True
+    _gravar_marca(data.get("sha", ""))
     return True
 
 
 def _push_database():
     """Envia o banco de dados atualizado para o GitHub."""
     _log("=== PUSH INICIANDO ===")
-    if not _estado["push_liberado"]:
+    token, owner, repo = _get_config()
+    if not token:
+        return False
+    url_contents = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main"
+    if not _estado["push_liberado"] and not _tentar_liberar(url_contents, token):
         _log("Push BLOQUEADO: o pull nao deu certo nesta execucao")
         _set_status(False, "Os dados da nuvem nao carregaram (" + (_estado.get("erro_pull") or "motivo desconhecido")
                     + ") - nada foi salvo para nao apagar nada",
                     "Recarregue a pagina. Se continuar, confira o github_token nos Secrets.")
-        return False
-    token, owner, repo = _get_config()
-    if not token:
         return False
 
     # Ler o banco local
@@ -284,7 +374,6 @@ def _push_database():
     _log(f"Banco local: {db_size} bytes, hash={db_hash}")
 
     # Pegar o SHA atual do arquivo no GitHub (necessario para update)
-    url_contents = f"https://api.github.com/repos/{owner}/{repo}/contents/{DB_REPO_PATH}?ref=main"
     status, data = _github_api("GET", url_contents, token, accept=ACCEPT_OBJETO)
 
     sha = None
@@ -319,6 +408,7 @@ def _push_database():
         new_sha = data.get("content", {}).get("sha", "?")
         _log(f"Push OK! status={status}, novo SHA={new_sha[:12] if len(new_sha) > 12 else new_sha}")
         _set_status(True, f"Salvo na nuvem! ({db_size} bytes)")
+        _gravar_marca(new_sha if new_sha != "?" else "")
         return True
     else:
         error_msg = data.get("error", str(data))[:200]

@@ -27,7 +27,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.18 · 28/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.19 · 28/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -170,11 +170,14 @@ if not check_password():
 
 # --- Sync: puxa dados mais recentes do GitHub (na nuvem) ---
 from sync import (pull_database, push_database, is_cloud, get_last_sync_status,  # noqa: E402
-                  importar_pendentes, diagnostico, tem_pendencia)
+                  importar_pendentes, diagnostico, tem_pendencia, reconectar)
 
 if is_cloud() and "db_pulled" not in st.session_state:
     pull_database()
     st.session_state.db_pulled = True
+elif is_cloud() and reconectar():
+    # O app foi atualizado com esta tela aberta: o que ficou so no servidor foi enviado agora
+    st.toast("☁️ Reconectado à nuvem: alterações salvas.", icon="✅")
 
 db.init_db()
 USUARIO = st.session_state.get("username", "")
