@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from PIL import Image
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +27,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.17 · 26/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.18 · 28/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -355,6 +356,21 @@ def itens_insumos(df, opcoes):
 def data_uri(jpeg):
     """Imagem JPEG em bytes -> texto que a coluna de imagem da tabela entende."""
     return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode() if jpeg else None
+
+
+# Caixa "colar imagem" (Ctrl+V / Colar no celular): componente proprio em componentes/colar_foto
+_colar_foto = components.declare_component("colar_foto", path=os.path.join(BASE_DIR, "componentes", "colar_foto"))
+
+
+def colar_foto(key):
+    """Mostra a caixa de colar imagem e devolve os bytes da imagem colada (ou None)."""
+    v = _colar_foto(key=key, default=None)
+    if isinstance(v, dict) and str(v.get("data", "")).startswith("data:image"):
+        try:
+            return base64.b64decode(v["data"].split(",", 1)[1])
+        except Exception:
+            return None
+    return None
 
 
 def rotulo_por_id(opcoes, item_id):
@@ -1029,8 +1045,11 @@ def pagina_produtos():
                        f"Energia a {brl(cfg['custo_kwh'])}/kWh. Mão de obra a {brl(cfg['hora_trabalho'])}/h. "
                        "Ajuste em ⚙️ Configurações.")
 
+            st.markdown("##### 💾 Salvar no catálogo")
+            st.caption("📷 Foto do produto (opcional): **cole a imagem aqui** ou envie o arquivo no formulário abaixo.")
+            # Fora do formulario: componentes proprios nao funcionam dentro de st.form
+            foto_colada = colar_foto(key=f"calc_foto_colar_{ev()}")
             with st.form("form_salvar_produto", clear_on_submit=True):
-                st.markdown("##### 💾 Salvar no catálogo")
                 n1, n2 = st.columns(2)
                 nome = n1.text_input("Nome do produto *", placeholder="Ex.: Chaveiro borboleta")
                 categoria = n2.text_input("Categoria", placeholder="Ex.: Chaveiros, Decoração, Vasos")
@@ -1041,7 +1060,8 @@ def pagina_produtos():
                                          ["— nenhum —"] + [k for k, f in fils.items()
                                                            if (f.get("tipo") or "Simples") == tipo_fil],
                                          help="Opcional. Não muda o custo, que usa a média do tipo.")
-                foto_nova = st.file_uploader("Foto do produto (opcional)", type=["jpg", "jpeg", "png", "webp"])
+                foto_nova = st.file_uploader("Foto do produto (opcional)", type=["jpg", "jpeg", "png", "webp"],
+                                             help="Se você colou uma imagem na caixa acima, não precisa enviar aqui.")
                 if st.form_submit_button("Salvar produto", type="primary"):
                     if not nome.strip():
                         st.error("Dê um nome ao produto.")
@@ -1056,9 +1076,10 @@ def pagina_produtos():
                         })
                         db.definir_insumos_produto(novo_id, [(i["id"], q) for i, q in itens_calc])
                         aviso_foto = ""
-                        if foto_nova is not None:
+                        dados_foto = foto_nova.getvalue() if foto_nova is not None else foto_colada
+                        if dados_foto:
                             try:
-                                db.salvar_foto_produto(novo_id, foto_nova.getvalue())
+                                db.salvar_foto_produto(novo_id, dados_foto)
                                 aviso_foto = " com foto"
                             except Exception as e:
                                 print(f"[FOTO] erro: {e}", flush=True)
@@ -1217,9 +1238,12 @@ def pagina_produtos():
             arq = st.file_uploader("Escolher foto (no celular dá para tirar na hora)", type=["jpg", "jpeg", "png", "webp"],
                                    key=f"foto_up_{pf['id']}_{ev()}",
                                    help="A foto é reduzida automaticamente para não pesar o app.")
-            if arq is not None and st.button("💾 Salvar foto", type="primary", key=f"foto_salvar_{pf['id']}"):
+            st.caption("…ou copie a imagem e cole aqui:")
+            colada = colar_foto(key=f"foto_colar_{pf['id']}_{ev()}")
+            dados_foto = arq.getvalue() if arq is not None else colada
+            if dados_foto and st.button("💾 Salvar foto", type="primary", key=f"foto_salvar_{pf['id']}"):
                 try:
-                    kb = db.salvar_foto_produto(pf["id"], arq.getvalue())
+                    kb = db.salvar_foto_produto(pf["id"], dados_foto)
                 except Exception as e:
                     print(f"[FOTO] erro: {e}", flush=True)
                     st.error("Não consegui abrir essa imagem. Tente uma foto em JPG ou PNG.")

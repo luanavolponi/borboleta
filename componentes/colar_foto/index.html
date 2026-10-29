@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; font-family: "Source Sans Pro", sans-serif; }
+  #zona {
+    box-sizing: border-box; width: 100%; min-height: 76px; padding: 12px 14px;
+    border: 2px dashed #9428B3; border-radius: 10px; background: #EEEBFC; color: #190A76;
+    font-size: 15px; line-height: 1.4; cursor: text; outline: none; text-align: center;
+    display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap;
+    caret-color: transparent;
+  }
+  #zona:focus { border-style: solid; box-shadow: 0 0 0 3px rgba(148, 40, 179, .25); }
+  #zona img { max-height: 90px; max-width: 140px; border-radius: 6px; }
+  #zona small { color: #5a4fa0; }
+  #btn {
+    margin-top: 6px; width: 100%; padding: 7px; border-radius: 8px; border: 1px solid #c9c3e8;
+    background: #fff; color: #190A76; font-size: 14px; cursor: pointer;
+  }
+  #btn:hover { border-color: #9428B3; }
+  #msg { font-size: 13px; color: #FF5110; min-height: 0; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div id="zona" contenteditable="true" spellcheck="false" tabindex="0">
+  <span>📋 <b>Colar imagem</b><br><small>Clique aqui e aperte Ctrl+V · no celular, segure e toque em "Colar"</small></span>
+</div>
+<button id="btn" type="button">📋 Colar o que copiei</button>
+<div id="msg"></div>
+<script>
+  const zona = document.getElementById("zona");
+  const btn = document.getElementById("btn");
+  const msg = document.getElementById("msg");
+
+  function enviar(tipo, dados) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: tipo }, dados || {}), "*");
+  }
+  function ajustarAltura() {
+    enviar("streamlit:setFrameHeight", { height: document.documentElement.scrollHeight + 2 });
+  }
+  function aviso(texto) { msg.textContent = texto || ""; ajustarAltura(); }
+
+  // Reduz no navegador (lado maior 1600 px, JPEG) para nao pesar o envio; o app reduz de novo ao salvar
+  function processar(arquivo) {
+    if (!arquivo) { aviso("Não encontrei uma imagem para colar. Copie a foto (não o link) e tente de novo."); return; }
+    const url = URL.createObjectURL(arquivo);
+    const img = new Image();
+    img.onload = () => {
+      const r = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * r)), h = Math.max(1, Math.round(img.height * r));
+      const tela = document.createElement("canvas");
+      tela.width = w; tela.height = h;
+      const ctx = tela.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);  // transparencia vira fundo branco
+      ctx.drawImage(img, 0, 0, w, h);
+      const dados = tela.toDataURL("image/jpeg", 0.9);
+      URL.revokeObjectURL(url);
+      zona.innerHTML = "";
+      const mini = document.createElement("img");
+      mini.src = dados;
+      const txt = document.createElement("span");
+      txt.innerHTML = "✅ <b>Imagem colada</b><br><small>Para trocar, cole outra aqui</small>";
+      zona.append(mini, txt);
+      aviso("");
+      enviar("streamlit:setComponentValue", { value: { id: Date.now(), data: dados }, dataType: "json" });
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); aviso("Não consegui abrir essa imagem. Tente copiar de novo."); };
+    img.src = url;
+  }
+
+  function imagemDe(dt) {
+    if (!dt) return null;
+    for (const f of (dt.files || [])) if (f.type && f.type.startsWith("image/")) return f;
+    for (const it of (dt.items || [])) if (it.kind === "file" && it.type.startsWith("image/")) return it.getAsFile();
+    return null;
+  }
+
+  zona.addEventListener("paste", (e) => { e.preventDefault(); processar(imagemDe(e.clipboardData)); });
+  zona.addEventListener("drop", (e) => { e.preventDefault(); processar(imagemDe(e.dataTransfer)); });
+  zona.addEventListener("dragover", (e) => e.preventDefault());
+  // A caixa so aceita colar: bloqueia digitacao e mantem o texto de ajuda
+  zona.addEventListener("beforeinput", (e) => { if (e.inputType !== "insertFromPaste") e.preventDefault(); });
+  zona.addEventListener("keydown", (e) => {
+    if (!(e.ctrlKey || e.metaKey) && !["Tab", "Shift", "Control", "Meta"].includes(e.key)) e.preventDefault();
+  });
+
+  btn.addEventListener("click", async () => {
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.read) throw new Error("sem suporte");
+      for (const item of await navigator.clipboard.read()) {
+        const tipo = item.types.find((t) => t.startsWith("image/"));
+        if (tipo) { processar(await item.getType(tipo)); return; }
+      }
+      aviso("Não há imagem copiada. Copie a foto e tente de novo.");
+    } catch (err) {
+      aviso("O navegador não deixou ler o que foi copiado. Clique na caixa acima e use Ctrl+V.");
+    }
+  });
+
+  window.addEventListener("message", (e) => {
+    if (e.data && e.data.type === "streamlit:render") ajustarAltura();
+  });
+  window.addEventListener("load", ajustarAltura);
+  enviar("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>
