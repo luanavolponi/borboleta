@@ -264,6 +264,10 @@ def pull_database():
         _set_status(False, "Ha alteracoes que ainda nao foram salvas na nuvem",
                     "O app tenta de novo a cada salvamento; use 'Tentar salvar agora' na barra lateral.")
         return False
+    if not _estado["push_liberado"] and os.path.exists(DB_PATH) and reconectar():
+        # Mesmo servidor depois de uma atualizacao do app: o banco local tinha tudo da nuvem e mais
+        # alteracoes; ele foi enviado em vez de ser apagado pelo download
+        return True
     ok = _pull_database()
     _estado["erro_pull"] = None if _estado["push_liberado"] else _last_sync_status.get("msg")
     return ok
@@ -386,6 +390,13 @@ def _push_database():
         _log(f"Erro ao buscar SHA: status={status}")
         _set_status(False, f"Erro ao buscar arquivo (status {status})", str(data))
         return False
+
+    # Nada mudou desde a versao da nuvem (mesmo SHA de blob do git): nao cria commit vazio
+    if sha and hashlib.sha1(b"blob %d\0" % db_size + db_bytes).hexdigest() == sha:
+        _log("Banco local igual ao da nuvem: nada a enviar")
+        _set_status(True, f"Nuvem já atualizada ({db_size} bytes)")
+        _gravar_marca(sha)
+        return True
 
     # Codificar em base64
     content_b64 = base64.b64encode(db_bytes).decode("utf-8")
