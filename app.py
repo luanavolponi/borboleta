@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.20 · 28/10/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.21 · 05/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -623,9 +623,19 @@ def pagina_pedidos():
             "Total": p["total"], "Recebido": p["valor_recebido"] or 0, "A receber": p["a_receber"],
             "Lucro est.": p["lucro"], "Prazo": fmt_data(p["prazo"]), "Canal": p["canal"] or "",
         } for p in peds])
-        st.dataframe(df, hide_index=True, use_container_width=True, column_config={
-            c: st.column_config.NumberColumn(format=DINHEIRO)
-            for c in ["Total", "Recebido", "A receber", "Lucro est."]})
+        st.caption("👆 **Clique num pedido** (na caixinha à esquerda da linha) para abrir e editar logo abaixo.")
+        # A chave muda com os filtros e a cada salvamento: a selecao antiga nao aponta para outra linha
+        chave_tab = f"ped_tab_{'-'.join(status_sel)}_{periodo}_{st.session_state.get('ped_v', 0)}"
+        tabela = st.dataframe(df, hide_index=True, use_container_width=True, on_select="rerun",
+                              selection_mode="single-row", key=chave_tab, column_config={
+                                  c: st.column_config.NumberColumn(format=DINHEIRO)
+                                  for c in ["Total", "Recebido", "A receber", "Lucro est."]})
+        linhas_sel = tabela.selection.rows if tabela else []
+        clicado = int(df.iloc[linhas_sel[0]]["Nº"]) if linhas_sel else None
+        if clicado != st.session_state.get("ped_tab_ultimo"):
+            st.session_state["ped_tab_ultimo"] = clicado
+            if clicado:
+                st.session_state["ped_sel_next_id"] = clicado  # abre no editor abaixo
     else:
         st.info("Nenhum pedido encontrado com esses filtros.")
 
