@@ -933,6 +933,45 @@ def aplicar_importacao(dados, usuario="Importação"):
                       (m["nome"], m.get("potencia_w", 150), m.get("valor_compra", 0), m.get("vida_util_horas", 5000)))
             n_imp += 1
 
+        # Produtos do catalogo (pulados se ja existe um com o mesmo nome); foto opcional em base64
+        n_prod = 0
+        imp_padrao = c.execute("SELECT id FROM impressoras WHERE ativa=1 ORDER BY id LIMIT 1").fetchone()
+        for pr in dados.get("produtos", []):
+            if c.execute("SELECT 1 FROM produtos WHERE lower(nome)=lower(?)", (pr["nome"],)).fetchone():
+                pulados += 1
+                continue
+            cur = c.execute("""INSERT INTO produtos(nome, categoria, tipo_filamento, impressora_id, gramas,
+                               horas_impressao, minutos_trabalho, custo_extra, margem_pct, preco_venda,
+                               estoque_minimo, obs, ativo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)""",
+                            (pr["nome"], pr.get("categoria", ""), pr.get("tipo_filamento", "Simples"),
+                             imp_padrao[0] if imp_padrao else None, pr.get("gramas", 0), pr.get("horas_impressao", 0),
+                             pr.get("minutos_trabalho", 0), pr.get("custo_extra", 0), pr.get("margem_pct"),
+                             pr.get("preco_venda", 0), pr.get("estoque_minimo", 0), pr.get("obs", "")))
+            novo_prod = cur.lastrowid
+            for ins in pr.get("insumos", []):  # [{"nome": ..., "qtd": por peca}]
+                i = c.execute("SELECT id FROM insumos WHERE lower(nome)=lower(?)", (ins["nome"],)).fetchone()
+                if i:
+                    c.execute("INSERT INTO produto_insumos(produto_id, insumo_id, qtd) VALUES (?,?,?)",
+                              (novo_prod, i[0], ins.get("qtd", 1)))
+            if pr.get("foto_b64"):
+                try:
+                    import base64
+                    import io
+                    from PIL import Image, ImageOps
+                    bruto = base64.b64decode(pr["foto_b64"])
+                    if pr.get("foto_recorte"):  # [x, y, lado] em pixels da foto original
+                        x, y, lado = pr["foto_recorte"]
+                        im = ImageOps.exif_transpose(Image.open(io.BytesIO(bruto))).convert("RGB")
+                        buf = io.BytesIO()
+                        im.crop((x, y, x + lado, y + lado)).save(buf, "PNG")
+                        bruto = buf.getvalue()
+                    foto, mini = _preparar_foto(bruto)
+                    c.execute("""INSERT OR REPLACE INTO produto_fotos(produto_id, foto, miniatura, atualizado_em)
+                                 VALUES (?,?,?,?)""", (novo_prod, foto, mini, datetime.now().strftime("%Y-%m-%d %H:%M")))
+                except Exception as e:
+                    print(f"[IMPORTACAO] foto de {pr['nome']} nao abriu: {e}", flush=True)
+            n_prod += 1
+
         # Clientes (pulados se ja existe alguem com o mesmo nome)
         n_cli = n_ped = 0
         cli_cols = _COLUNAS["clientes"]
@@ -981,7 +1020,7 @@ def aplicar_importacao(dados, usuario="Importação"):
             n_ped += 1
 
         resumo = (f"Importado: {n_desp} despesa(s) no Financeiro, {n_fil} filamento(s), {n_ins} insumo(s)"
-                  f", {n_imp} impressora(s), {n_cli} cliente(s) e {n_ped} pedido(s)"
+                  f", {n_imp} impressora(s), {n_prod} produto(s), {n_cli} cliente(s) e {n_ped} pedido(s)"
                   + (f" · {pulados} item(ns) já existiam e foram pulados" if pulados else ""))
         c.execute("INSERT INTO importacoes(id, quando, resumo) VALUES (?,?,?)",
                   (dados["id"], datetime.now().strftime("%Y-%m-%d %H:%M"), resumo))
