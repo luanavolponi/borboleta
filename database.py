@@ -224,7 +224,8 @@ def init_db():
                                   ("clientes", "cep", "TEXT DEFAULT ''"), ("clientes", "endereco", "TEXT DEFAULT ''"),
                                   ("clientes", "numero", "TEXT DEFAULT ''"),
                                   ("clientes", "complemento", "TEXT DEFAULT ''"),
-                                  ("clientes", "bairro", "TEXT DEFAULT ''"), ("clientes", "uf", "TEXT DEFAULT ''")]:
+                                  ("clientes", "bairro", "TEXT DEFAULT ''"), ("clientes", "uf", "TEXT DEFAULT ''"),
+                                  ("clientes", "referencia", "TEXT DEFAULT ''")]:
             if col not in {r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")}:
                 c.execute(f"ALTER TABLE {tabela} ADD COLUMN {col} {tipo}")
         cols = {r["name"] for r in c.execute("PRAGMA table_info(lancamentos)")}
@@ -278,7 +279,7 @@ _COLUNAS = {
                  "minutos_trabalho", "custo_extra", "margem_pct", "preco_venda", "estoque_pronto",
                  "estoque_minimo", "obs", "ativo", "tipo_filamento"],
     "clientes": ["nome", "telefone", "instagram", "email", "cidade", "obs",
-                 "cep", "endereco", "numero", "complemento", "bairro", "uf"],
+                 "cep", "endereco", "numero", "complemento", "bairro", "uf", "referencia"],
 }
 
 
@@ -341,7 +342,8 @@ def endereco_formatado(cli):
     cidade = "/".join(p for p in (g("cidade"), g("uf")) if p)
     cep = re_digitos(g("cep"))
     cep = f"CEP {cep[:5]}-{cep[5:]}" if len(cep) == 8 else (f"CEP {g('cep')}" if g("cep") else "")
-    return " - ".join(p for p in (rua, g("complemento"), g("bairro"), cidade, cep) if p)
+    ref = f"Ref.: {g('referencia')}" if g("referencia") else ""
+    return " - ".join(p for p in (rua, g("complemento"), g("bairro"), cidade, cep, ref) if p)
 
 
 def re_digitos(texto):

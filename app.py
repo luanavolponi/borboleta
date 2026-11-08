@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.35 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.36 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -496,7 +496,8 @@ def _salvar_pedidos_editados(chave, ids, cli_rot, status_rot):
 
 COLUNAS_CLIENTE = {"Nome": "nome", "WhatsApp": "telefone", "Instagram": "instagram", "E-mail": "email",
                    "CEP": "cep", "Rua": "endereco", "Número": "numero", "Complemento": "complemento",
-                   "Bairro": "bairro", "Cidade": "cidade", "UF": "uf", "Obs": "obs"}
+                   "Bairro": "bairro", "Cidade": "cidade", "UF": "uf", "Ponto de referência": "referencia",
+                   "Obs": "obs"}
 
 
 def _salvar_clientes_editados(chave, ids):
@@ -1036,11 +1037,12 @@ def pagina_clientes():
             endereco = e2.text_input("Rua / avenida")
             numero = e3.text_input("Número")
             e4, e5 = st.columns(2)
-            complemento = e4.text_input("Complemento", placeholder="apto, bloco, referência...")
+            complemento = e4.text_input("Complemento", placeholder="apto, bloco, casa...")
             bairro = e5.text_input("Bairro")
             e6, e7 = st.columns([3, 1])
             cidade = e6.text_input("Cidade")
             uf = e7.selectbox("Estado", db.UFS)
+            referencia = st.text_input("Ponto de referência", placeholder="perto de..., em frente a..., portão azul...")
             obs = st.text_input("Observações (preferências, aniversário...)")
             if st.form_submit_button("Cadastrar", type="primary"):
                 if not nome.strip():
@@ -1051,6 +1053,7 @@ def pagina_clientes():
                                             "cep": cep.strip(), "endereco": endereco.strip(),
                                             "numero": numero.strip(), "complemento": complemento.strip(),
                                             "bairro": bairro.strip(), "cidade": cidade.strip(), "uf": uf,
+                                            "referencia": referencia.strip(),
                                             "obs": obs.strip()})
                     salvo(f"{nome.strip()} cadastrado(a)!")
                     st.rerun()
@@ -1076,12 +1079,14 @@ def pagina_clientes():
              c["cidade"] or ""]).lower()]
 
     colunas = ["id", "Nome", "WhatsApp", "Instagram", "E-mail", "CEP", "Rua", "Número", "Complemento", "Bairro",
-               "Cidade", "UF", "Obs", "Pedidos", "Total comprado", "Último pedido", "Excluir?"]
+               "Cidade", "UF", "Ponto de referência", "Obs", "Pedidos", "Total comprado", "Último pedido",
+               "Excluir?"]
     df = pd.DataFrame([{
         "id": c["id"], "Nome": c["nome"], "WhatsApp": c["telefone"] or "", "Instagram": c["instagram"] or "",
         "E-mail": c["email"] or "", "CEP": c.get("cep") or "", "Rua": c.get("endereco") or "",
         "Número": c.get("numero") or "", "Complemento": c.get("complemento") or "",
         "Bairro": c.get("bairro") or "", "Cidade": c["cidade"] or "", "UF": c.get("uf") or "",
+        "Ponto de referência": c.get("referencia") or "",
         "Obs": c["obs"] or "",
         "Pedidos": stats.get(c["id"], {}).get("n", 0),
         "Total comprado": stats.get(c["id"], {}).get("total", 0.0),
