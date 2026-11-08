@@ -320,7 +320,16 @@ def atualizar(tabela, item_id, dados):
         return
     sets = ", ".join(f"{k} = ?" for k in dados)
     with _conn() as c:
+        antigo = None
+        if tabela == "produtos" and dados.get("nome"):
+            r = c.execute("SELECT nome FROM produtos WHERE id = ?", (item_id,)).fetchone()
+            antigo = r[0] if r else None
         c.execute(f"UPDATE {tabela} SET {sets} WHERE id = ?", list(dados.values()) + [item_id])
+        if antigo and antigo != dados["nome"]:
+            # Produto renomeado: os pedidos que usavam o nome do catalogo passam a mostrar o nome novo
+            # (descricoes personalizadas, ex. "... cor cappuccino", ficam como estao)
+            c.execute("UPDATE pedido_itens SET descricao = ? WHERE produto_id = ? AND descricao = ?",
+                      (dados["nome"], item_id, antigo))
 
 
 def excluir(tabela, item_id):
@@ -451,6 +460,30 @@ def custo_produto(produto, cfg=None, medias=None):
     return calcular_custo(produto.get("gramas"), produto.get("horas_impressao"),
                           produto.get("minutos_trabalho"), extras, fil, imp, cfg,
                           tipo_filamento=produto.get("tipo_filamento"), medias=medias)
+
+
+def sincronizar_custos_pedidos():
+    """Pecas do catalogo nos pedidos usam o custo ATUAL do catalogo (lucro dos pedidos acompanha).
+
+    O preco cobrado nao muda (e o que o cliente pagou); pecas personalizadas mantem o custo proprio.
+    Retorna quantos itens mudaram.
+    """
+    cfg = get_config()
+    medias = medias_filamento(cfg)
+    with _conn() as c:
+        ids = [r[0] for r in c.execute("SELECT DISTINCT produto_id FROM pedido_itens WHERE produto_id IS NOT NULL")]
+    novos = {}
+    for pid in ids:
+        p = obter("produtos", pid)
+        if p:
+            novos[pid] = round(custo_produto(p, cfg, medias)["total"], 4)
+    mudou = 0
+    with _conn() as c:
+        for pid, custo in novos.items():
+            mudou += c.execute("""UPDATE pedido_itens SET custo_unit=?
+                                  WHERE produto_id=? AND ABS(COALESCE(custo_unit, 0) - ?) > 0.00005""",
+                               (custo, pid, custo)).rowcount
+    return mudou
 
 
 # ---------------------------------------------------------------- estoque

@@ -52,7 +52,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.41 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.42 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -224,6 +224,15 @@ if "fixas_geradas" not in st.session_state:
     except Exception as _e:
         print(f"[FIXAS] erro: {_e}", flush=True)
 
+# --- Custo das pecas nos pedidos = custo atual do catalogo (uma vez por sessao; depois, a cada salvamento) ---
+if "custos_sincronizados" not in st.session_state:
+    st.session_state.custos_sincronizados = True
+    try:
+        if db.sincronizar_custos_pedidos() and is_cloud():
+            push_database()
+    except Exception as _e:
+        print(f"[CUSTOS] erro: {_e}", flush=True)
+
 if "acesso_logado" not in st.session_state:
     st.session_state.acesso_logado = True
     try:
@@ -249,6 +258,11 @@ def salvo(msg="Salvo!"):
     """Envia o banco para a nuvem (quando publicado) e avisa."""
     # Recria as tabelas editaveis do zero (edicoes antigas nao "pulam" para outra linha)
     st.session_state["ed_v"] = st.session_state.get("ed_v", 0) + 1
+    try:
+        # Qualquer mudanca (catalogo, insumos, filamentos, configuracoes) reflete no custo/lucro dos pedidos
+        db.sincronizar_custos_pedidos()
+    except Exception as e:
+        print(f"[CUSTOS] sincronizacao falhou: {e}", flush=True)
     if is_cloud():
         try:
             ok = push_database()
@@ -895,7 +909,8 @@ def pagina_pedidos():
         } for p in peds])
         st.caption("✏️ **Edite direto na tabela:** cliente, status, prazo, valor recebido, canal e pagamento "
                    "(ou marque **💰 Pago**). Cada alteração é salva na hora, com estoque e Financeiro juntos. "
-                   "Para mudar os **itens**, abra o pedido logo abaixo.")
+                   "Para mudar os **itens**, abra o pedido logo abaixo. O **lucro** usa o custo atual de cada "
+                   "produto no catálogo (o preço cobrado fica como foi vendido).")
         # A chave muda com os filtros e a cada salvamento: a tabela sempre mostra o que esta no banco
         chave_tab = f"ped_tab_{'-'.join(status_sel)}_{periodo}_{ev()}"
         st.data_editor(
