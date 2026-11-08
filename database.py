@@ -527,7 +527,10 @@ def get_alertas_estoque():
 def listar_pedidos(status=None, data_ini=None, data_fim=None):
     sql = """SELECT p.*, COALESCE(c.nome, '—') AS cliente,
                     COALESCE((SELECT SUM(qtd * preco_unit) FROM pedido_itens WHERE pedido_id = p.id), 0) AS subtotal,
-                    COALESCE((SELECT SUM(qtd * custo_unit) FROM pedido_itens WHERE pedido_id = p.id), 0) AS custo
+                    COALESCE((SELECT SUM(qtd * custo_unit) FROM pedido_itens WHERE pedido_id = p.id), 0) AS custo,
+                    COALESCE((SELECT SUM(qtd) FROM pedido_itens WHERE pedido_id = p.id), 0) AS qtd_itens,
+                    COALESCE((SELECT GROUP_CONCAT(qtd || '× ' || descricao, ', ')
+                              FROM pedido_itens WHERE pedido_id = p.id), '') AS itens_txt
              FROM pedidos p LEFT JOIN clientes c ON c.id = p.cliente_id WHERE 1=1"""
     args = []
     if status:
