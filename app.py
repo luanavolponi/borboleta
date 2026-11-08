@@ -930,7 +930,7 @@ def pagina_pedidos():
             prod_label = _txt(r.get("Produto"))
             desc = _txt(r.get("Descrição"))
             prod = prod_opts.get(prod_label) if prod_label and prod_label != PERSONALIZADO else None
-            if not prod and not desc:
+            if not prod and not desc and not _num(r.get("Preço un.")):
                 continue
             qtd = int(_num(r.get("Qtd"), 1) or 1)
             preco = _num(r.get("Preço un."))
