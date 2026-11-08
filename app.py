@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.22 · 05/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.23 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -291,8 +291,33 @@ def intervalo_mes(ym):
     return ini.isoformat(), (prox - timedelta(days=1)).isoformat()
 
 
-def seletor_mes(key):
-    return st.selectbox("Mês", lista_meses(), format_func=mes_label, key=key)
+TODOS_MESES = "todos"
+
+
+def meses_do_estudio():
+    """Meses do 1o registro da Borboleta ate o ultimo (parcelas futuras), sempre incluindo o mes atual."""
+    atual = date.today().strftime("%Y-%m")
+    primeiro, ultimo = db.periodo_registros()
+    primeiro = min(primeiro or atual, atual)
+    ultimo = max(ultimo or atual, atual)
+    meses, ym = [], primeiro
+    while ym <= ultimo:
+        meses.append(ym)
+        y, m = map(int, ym.split("-"))
+        ym = f"{y + (m == 12):04d}-{1 if m == 12 else m + 1:02d}"
+    return meses
+
+
+def seletor_mes(key, com_todos=False):
+    """Mes escolhido ('YYYY-MM'), do mais novo (parcelas futuras) ao inicio; abre no mes atual."""
+    meses = list(reversed(meses_do_estudio()))
+    opcoes = ([TODOS_MESES] if com_todos else []) + meses
+    atual = date.today().strftime("%Y-%m")
+    if st.session_state.get(key) not in opcoes:
+        st.session_state[key] = atual
+    return st.selectbox("Mês", opcoes, key=key,
+                        format_func=lambda m: "📊 Todos os meses (desde o início)" if m == TODOS_MESES
+                        else mes_label(m) + (" · mês atual" if m == atual else ""))
 
 
 def _num(v, padrao=0.0):
@@ -465,8 +490,18 @@ def pagina_inicio():
         titulo("Painel do estúdio", slogan=True)
     c1, _ = st.columns([1, 3])
     with c1:
-        mes = seletor_mes("inicio_mes")
-    ini, fim = intervalo_mes(mes)
+        mes = seletor_mes("inicio_mes", com_todos=True)
+    todos_meses = mes == TODOS_MESES
+    if todos_meses:
+        # Visao consolidada: do 1o registro ate hoje (parcelas futuras ficam em "A pagar")
+        ini = intervalo_mes(meses_do_estudio()[0])[0]
+        fim = date.today().isoformat()
+        periodo_txt = f"Todos os meses · {mes_label(ini[:7])} até hoje"
+        sufixo = "no período"
+    else:
+        ini, fim = intervalo_mes(mes)
+        periodo_txt = mes_label(mes)
+        sufixo = "no mês"
 
     lancs = db.listar_lancamentos(ini, fim)
     entradas = sum(l["valor"] for l in lancs if l["tipo"] == "entrada")
@@ -482,12 +517,13 @@ def pagina_inicio():
     a_receber = sum(p["a_receber"] for p in validos)
     orcamentos = [p for p in todos if p["status"] == "Orçamento"]
 
-    st.markdown(f"#### 📊 {mes_label(mes)}")
+    st.markdown(f"#### 📊 {periodo_txt}")
     linha_cards([
-        ("Vendido no mês", brl(vendido), ROXO, f"{len(do_mes)} pedido(s) · lucro est. {brl(lucro_mes)}"),
-        ("Recebido no mês", brl(recebido_vendas), VERDE, f"entradas totais {brl(entradas)}"),
-        ("Despesas do mês", brl(saidas), VERMELHO, ""),
-        ("Resultado do mês", brl(entradas - saidas), VERDE if entradas >= saidas else VERMELHO,
+        (f"Vendido {sufixo}", brl(vendido), ROXO, f"{len(do_mes)} pedido(s) · lucro est. {brl(lucro_mes)}"),
+        (f"Recebido {sufixo}", brl(recebido_vendas), VERDE, f"entradas totais {brl(entradas)}"),
+        (f"Despesas {sufixo}", brl(saidas), VERMELHO,
+         "vencidas até hoje (inclui investimento)" if todos_meses else ""),
+        (f"Resultado {sufixo}", brl(entradas - saidas), VERDE if entradas >= saidas else VERMELHO,
          "entradas − despesas"),
     ])
     contas = db.contas_a_pagar()
@@ -565,10 +601,10 @@ def pagina_inicio():
             fig.update_layout(barmode="group", yaxis_tickprefix="R$ ")
             st.plotly_chart(layout_grafico(fig), key="graf_inicio_mensal")
     with col_d:
-        st.markdown("#### 🏆 Mais vendidos no mês")
+        st.markdown(f"#### 🏆 Mais vendidos {sufixo}")
         top = db.itens_vendidos(ini, fim)[:8]
         if not top:
-            st.caption("Nenhuma venda registrada neste mês.")
+            st.caption(f"Nenhuma venda registrada {'neste período' if todos_meses else 'neste mês'}.")
         else:
             st.dataframe(pd.DataFrame(top).rename(columns={"item": "Item", "qtd": "Qtd",
                                                            "receita": "Receita", "lucro": "Lucro"}),

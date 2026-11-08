@@ -812,6 +812,19 @@ def excluir_lancamento(lanc_id):
         c.execute("DELETE FROM lancamentos WHERE id=?", (lanc_id,))
 
 
+def periodo_registros():
+    """(primeiro, ultimo) mes 'YYYY-MM' com algum registro: lancamentos (vencimento ou compra) e pedidos.
+
+    O ultimo inclui parcelas futuras. None, None se ainda nao ha nada.
+    """
+    with _conn() as c:
+        r = c.execute("""SELECT MIN(d), MAX(d) FROM (
+                             SELECT data AS d FROM lancamentos
+                             UNION ALL SELECT data_compra FROM lancamentos WHERE data_compra IS NOT NULL
+                             UNION ALL SELECT data FROM pedidos) WHERE d IS NOT NULL AND d != ''""").fetchone()
+    return (r[0][:7], r[1][:7]) if r and r[0] else (None, None)
+
+
 def resumo_mensal(meses=12):
     """Entradas/saidas por mes (YYYY-MM) dos ultimos N meses com movimento, ate o mes atual.
 
