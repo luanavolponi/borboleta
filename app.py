@@ -565,24 +565,15 @@ def pagina_inicio():
 
     with col_b:
         vencendo = [l for l in contas if (para_data(l["data"]) or hoje) <= hoje + timedelta(days=7)]
-        if vencendo:
-            st.markdown("#### 📌 Contas da semana")
+        st.markdown("#### 📌 Contas da semana")
+        if not vencendo:
+            st.success("Nenhuma conta vencendo nos próximos 7 dias.")
+        else:
             for l in vencendo[:6]:
                 st.warning(f"**{l['descricao']}** — {brl(l['valor'])} · "
                            f"{situacao_vencimento(l['data'], False)}")
             if len(vencendo) > 6:
                 st.caption(f"+ {len(vencendo) - 6} outra(s) em 💰 Financeiro → Contas a pagar")
-        st.markdown("#### 🚨 Estoque baixo")
-        fil, ins, prod = db.get_alertas_estoque()
-        if not (fil or ins or prod):
-            st.success("Tudo certo com o estoque!")
-        for f in fil:
-            st.warning(f"🧵 **{db.nome_filamento(f)}** — restam {f['estoque_g']:.0f} g "
-                       f"(mínimo {f['estoque_minimo_g']:.0f} g)")
-        for i in ins:
-            st.warning(f"🧰 **{i['nome']}** — restam {i['estoque']:g} {i['unidade']}")
-        for p in prod:
-            st.info(f"🎁 **{p['nome']}** — {p['estoque_pronto']} pronto(s), mínimo {p['estoque_minimo']}")
 
     col_c, col_d = st.columns([3, 2])
     with col_c:
