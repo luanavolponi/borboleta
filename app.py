@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.23 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.25 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -517,7 +517,12 @@ def pagina_inicio():
     a_receber = sum(p["a_receber"] for p in validos)
     orcamentos = [p for p in todos if p["status"] == "Orçamento"]
 
-    st.markdown(f"#### 📊 {periodo_txt}")
+    contas = db.contas_a_pagar()
+    hoje = date.today()
+    a_pagar_30 = [l for l in contas if (para_data(l["data"]) or hoje) <= hoje + timedelta(days=30)]
+
+    # ================= 1) Financeiro
+    st.markdown(f"### 💰 Financeiro · {periodo_txt}")
     linha_cards([
         (f"Vendido {sufixo}", brl(vendido), ROXO, f"{len(do_mes)} pedido(s) · lucro est. {brl(lucro_mes)}"),
         (f"Recebido {sufixo}", brl(recebido_vendas), VERDE, f"entradas totais {brl(entradas)}"),
@@ -526,15 +531,49 @@ def pagina_inicio():
         (f"Resultado {sufixo}", brl(entradas - saidas), VERDE if entradas >= saidas else VERMELHO,
          "entradas − despesas"),
     ])
-    contas = db.contas_a_pagar()
-    hoje = date.today()
-    a_pagar_30 = [l for l in contas if (para_data(l["data"]) or hoje) <= hoje + timedelta(days=30)]
     linha_cards([
-        ("Pedidos em aberto", str(len(abertos)), AZUL, f"+ {len(orcamentos)} orçamento(s) pendente(s)"),
         ("A receber", brl(a_receber), AMBAR, "de pedidos já fechados"),
         ("A pagar em 30 dias", brl(sum(l["valor"] for l in a_pagar_30)), VERMELHO,
          f"inclui vencidas · total em aberto {brl(sum(l['valor'] for l in contas))}"),
         ("Saldo em caixa", brl(db.saldo_caixa()), ROXO, "só o que já entrou e já foi pago"),
+    ])
+
+    st.markdown("#### 📌 Contas da semana")
+    vencendo = [l for l in contas if (para_data(l["data"]) or hoje) <= hoje + timedelta(days=7)]
+    if not vencendo:
+        st.success("Nenhuma conta vencendo nos próximos 7 dias.")
+    else:
+        cols_v = st.columns(2)
+        for i, l in enumerate(vencendo[:8]):
+            cols_v[i % 2].warning(f"**{l['descricao']}** — {brl(l['valor'])} · "
+                                  f"{situacao_vencimento(l['data'], False)}")
+        if len(vencendo) > 8:
+            st.caption(f"+ {len(vencendo) - 8} outra(s) em 💰 Financeiro → Contas a pagar")
+
+    st.markdown("#### 📈 Entradas × despesas por mês")
+    res = db.resumo_mensal(12)
+    if not res:
+        st.caption("O gráfico aparece quando houver lançamentos no Financeiro.")
+    else:
+        df = pd.DataFrame(res)
+        df["Mês"] = df["mes"].map(mes_label)
+        fig = go.Figure()
+        fig.add_bar(x=df["Mês"], y=df["entradas"], name="Entradas", marker_color=VERDE)
+        fig.add_bar(x=df["Mês"], y=df["saidas"], name="Despesas", marker_color=VERMELHO)
+        fig.add_scatter(x=df["Mês"], y=df["resultado"], name="Resultado", mode="lines+markers",
+                        line=dict(color=AZUL, width=3), marker=dict(color=AZUL))
+        fig.update_layout(barmode="group", yaxis_tickprefix="R$ ")
+        st.plotly_chart(layout_grafico(fig), key="graf_inicio_mensal")
+
+    # ================= 2) Pedidos e produtos
+    st.divider()
+    st.markdown("### 🎁 Pedidos e produtos")
+    atrasados = [p for p in abertos if (para_data(p["prazo"]) or date.max) < hoje]
+    linha_cards([
+        ("Pedidos em aberto", str(len(abertos)), AZUL, "confirmados, produzindo ou prontos"),
+        ("Entregas atrasadas", str(len(atrasados)), VERMELHO if atrasados else VERDE,
+         "prazo já passou" if atrasados else "tudo em dia"),
+        ("Orçamentos pendentes", str(len(orcamentos)), AMBAR, "aguardando o cliente"),
     ])
 
     col_a, col_b = st.columns([3, 2])
@@ -543,7 +582,6 @@ def pagina_inicio():
         if not abertos:
             st.info("Nenhum pedido em aberto. 🎉")
         else:
-            hoje = date.today()
             linhas = []
             for p in sorted(abertos, key=lambda x: x["prazo"] or "9999"):
                 prazo = para_data(p["prazo"])
@@ -562,36 +600,7 @@ def pagina_inicio():
             st.dataframe(pd.DataFrame(linhas), hide_index=True, use_container_width=True,
                          column_config={"Total": st.column_config.NumberColumn(format=DINHEIRO),
                                         "A receber": st.column_config.NumberColumn(format=DINHEIRO)})
-
     with col_b:
-        vencendo = [l for l in contas if (para_data(l["data"]) or hoje) <= hoje + timedelta(days=7)]
-        st.markdown("#### 📌 Contas da semana")
-        if not vencendo:
-            st.success("Nenhuma conta vencendo nos próximos 7 dias.")
-        else:
-            for l in vencendo[:6]:
-                st.warning(f"**{l['descricao']}** — {brl(l['valor'])} · "
-                           f"{situacao_vencimento(l['data'], False)}")
-            if len(vencendo) > 6:
-                st.caption(f"+ {len(vencendo) - 6} outra(s) em 💰 Financeiro → Contas a pagar")
-
-    col_c, col_d = st.columns([3, 2])
-    with col_c:
-        st.markdown("#### 📈 Entradas × despesas por mês")
-        res = db.resumo_mensal(12)
-        if not res:
-            st.caption("Os gráficos aparecem quando houver lançamentos no Financeiro.")
-        else:
-            df = pd.DataFrame(res)
-            df["Mês"] = df["mes"].map(mes_label)
-            fig = go.Figure()
-            fig.add_bar(x=df["Mês"], y=df["entradas"], name="Entradas", marker_color=VERDE)
-            fig.add_bar(x=df["Mês"], y=df["saidas"], name="Despesas", marker_color=VERMELHO)
-            fig.add_scatter(x=df["Mês"], y=df["resultado"], name="Resultado", mode="lines+markers",
-                            line=dict(color=AZUL, width=3), marker=dict(color=AZUL))
-            fig.update_layout(barmode="group", yaxis_tickprefix="R$ ")
-            st.plotly_chart(layout_grafico(fig), key="graf_inicio_mensal")
-    with col_d:
         st.markdown(f"#### 🏆 Mais vendidos {sufixo}")
         top = db.itens_vendidos(ini, fim)[:8]
         if not top:
