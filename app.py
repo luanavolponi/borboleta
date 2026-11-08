@@ -53,7 +53,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.40 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.41 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -1246,6 +1246,162 @@ def arredondar_preco(v):
     return math.ceil(v - 0.9) + 0.9
 
 
+SEM_FILAMENTO = "— nenhum —"
+SEM_IMPRESSORA = "— nenhuma —"
+
+
+def _limpar_dialogo(K):
+    for k in [k for k in st.session_state if str(k).startswith(K)]:
+        del st.session_state[k]
+
+
+def _dlg_preco_mudou(K, taxa):
+    """Preco digitado: a margem acompanha."""
+    mg = margem_do_preco(st.session_state[K + "preco"], st.session_state.get(K + "custo", 0), taxa)
+    if mg is not None:
+        st.session_state[K + "margem"] = mg
+
+
+def _dlg_margem_mudou(K, taxa):
+    """Margem digitada: o preco acompanha (arredondado em ,90)."""
+    custo = st.session_state.get(K + "custo", 0)
+    if custo > 0:
+        st.session_state[K + "preco"] = arredondar_preco(
+            db.preco_sugerido(custo, st.session_state[K + "margem"], taxa))
+
+
+@st.dialog("✏️ Editar produto", width="large")
+def dialogo_produto(pid, cfg, medias, fils_todos, imps_todas):
+    """Janela com tudo do produto: foto, dados, extras, preco e margem (ligados entre si)."""
+    p = db.obter("produtos", pid)
+    if not p:
+        st.error("Produto não encontrado.")
+        return
+    ss, K, taxa = st.session_state, f"dlg_{pid}_", cfg["taxa_venda"]
+    imp_padrao_rot = list(imps_todas)[0] if imps_todas else SEM_IMPRESSORA
+    if K + "ini" not in ss:
+        ss.update({
+            K + "nome": p["nome"], K + "cat": p["categoria"] or "",
+            K + "tipo": p["tipo_filamento"] if p["tipo_filamento"] in db.TIPOS_FILAMENTO else "Simples",
+            K + "fil": rotulo_por_id(fils_todos, p["filamento_id"]) or SEM_FILAMENTO,
+            K + "imp": rotulo_por_id(imps_todas, p["impressora_id"]) or imp_padrao_rot,
+            K + "g": float(p["gramas"] or 0), K + "h": float(p["horas_impressao"] or 0),
+            K + "min": float(p["minutos_trabalho"] or 0), K + "extra": float(p["custo_extra"] or 0),
+            K + "preco": float(p["preco_venda"] or 0),
+            K + "margem": float(p["margem_pct"] if p["margem_pct"] is not None else cfg["margem_padrao"]),
+            K + "ativo": bool(p["ativo"]), K + "foto_v": 0, K + "ini": True})
+
+    c_foto, c_dados = st.columns([1, 2])
+    with c_foto:
+        atual = db.obter_foto(pid)
+        if atual:
+            st.image(atual, use_container_width=True)
+        else:
+            st.markdown(f'<div style="aspect-ratio:1;background:{LAVANDA};border-radius:12px;display:flex;'
+                        f'align-items:center;justify-content:center;color:{ROXO};">📷 sem foto</div>',
+                        unsafe_allow_html=True)
+        with st.expander("📷 Trocar foto" if atual else "📷 Colocar foto", expanded=not atual):
+            nova = editor_foto(key=f"{K}foto_{ss[K + 'foto_v']}")
+            if nova:
+                try:
+                    kb = db.salvar_foto_produto(pid, nova)
+                except Exception as e:
+                    print(f"[FOTO] erro: {e}", flush=True)
+                    st.error("Não consegui abrir essa imagem. Tente uma foto em JPG ou PNG.")
+                else:
+                    ss[K + "foto_v"] += 1  # o editor volta ao inicio (a mesma foto nao e salva de novo)
+                    salvo(f"Foto de {p['nome']} salva ({kb} KB)")
+                    st.rerun(scope="fragment")
+            if atual and st.button("🗑️ Remover foto", key=K + "foto_rm"):
+                db.remover_foto_produto(pid)
+                salvo("Foto removida")
+                st.rerun(scope="fragment")
+    with c_dados:
+        st.text_input("Nome do produto *", key=K + "nome")
+        a, b = st.columns(2)
+        a.text_input("Categoria", key=K + "cat")
+        b.selectbox("Tipo de filamento", db.TIPOS_FILAMENTO, key=K + "tipo",
+                    help="Define o preço médio do filamento no custo")
+        a.selectbox("Filamento (baixa no estoque)", [SEM_FILAMENTO] + list(fils_todos), key=K + "fil",
+                    help="Opcional: rolo que sai do estoque ao produzir. Não muda o custo.")
+        b.selectbox("Impressora", list(imps_todas) or [SEM_IMPRESSORA], key=K + "imp")
+        a, b, c = st.columns(3)
+        a.number_input("Gramas por peça", min_value=0.0, step=1.0, format="%.0f", key=K + "g")
+        b.number_input("Horas de impressão por peça", min_value=0.0, step=0.05, format="%.2f", key=K + "h")
+        c.number_input("Minutos de trabalho manual", min_value=0.0, step=1.0, format="%.0f", key=K + "min")
+
+    st.markdown("**🧰 Itens extras por peça** (embalagem, argola, cartão…)")
+    ins_opts = opcoes_insumos(apenas_ativos=False)
+    if K + "ins_df" not in ss:
+        rot = {i["id"]: k for k, i in ins_opts.items()}
+        atuais = db.insumos_do_produto(pid)
+        ss[K + "ins_df"] = pd.DataFrame({
+            "Insumo": pd.Series([rot.get(i["insumo_id"]) for i in atuais], dtype="object"),
+            "Qtd por peça": pd.Series([float(i["qtd"]) for i in atuais], dtype="float")})
+    ed_ins = st.data_editor(
+        ss[K + "ins_df"], num_rows="dynamic", hide_index=True, use_container_width=True, key=K + "ins",
+        column_config={"Insumo": st.column_config.SelectboxColumn(options=list(ins_opts), width="large"),
+                       "Qtd por peça": st.column_config.NumberColumn(min_value=0, step=1, format="%g")})
+    novos_ins = itens_insumos(ed_ins, ins_opts)
+    st.number_input("Outros extras (R$ por peça, fora da lista acima)", min_value=0.0, step=0.1, format="%.2f",
+                    key=K + "extra")
+
+    # Custo com o que esta na tela agora; se ele mudar, o preco fica e a margem acompanha
+    extras = ss[K + "extra"] + sum(i["custo_unit"] * q for i, q in novos_ins)
+    custo = db.calcular_custo(ss[K + "g"], ss[K + "h"], ss[K + "min"], extras, fils_todos.get(ss[K + "fil"]),
+                              imps_todas.get(ss[K + "imp"]), cfg, tipo_filamento=ss[K + "tipo"],
+                              medias=medias)["total"]
+    if ss.get(K + "custo") is None or abs(ss[K + "custo"] - custo) > 1e-9:
+        mg = margem_do_preco(ss[K + "preco"], custo, taxa)
+        if mg is not None:
+            ss[K + "margem"] = mg
+    ss[K + "custo"] = custo
+
+    st.markdown("**💰 Preço**")
+    a, b = st.columns(2)
+    a.number_input("Preço de venda (R$)", min_value=0.0, step=0.5, format="%.2f", key=K + "preco",
+                   on_change=_dlg_preco_mudou, args=(K, taxa), help="Mudou o preço, a margem é recalculada.")
+    b.number_input("Margem %", step=5.0, format="%.1f", key=K + "margem", disabled=custo <= 0,
+                   on_change=_dlg_margem_mudou, args=(K, taxa),
+                   help="Mudou a margem, o preço é recalculado (terminando em ,90)."
+                   if custo > 0 else "Preencha gramas e horas para calcular a margem.")
+    lucro = ss[K + "preco"] * (1 - taxa / 100) - custo
+    linha_cards([("Custo por peça", brl(custo), VERMELHO, "material, energia, máquina, trabalho e extras"),
+                 ("Lucro por peça", brl(lucro), VERDE if lucro >= 0 else VERMELHO,
+                  "já descontada a taxa de venda" if taxa else "preço − custo")])
+    st.toggle("Ativo (aparece para escolher nos pedidos novos)", key=K + "ativo")
+
+    s1, s2 = st.columns([2, 1])
+    if s1.button("💾 Salvar alterações", type="primary", use_container_width=True, key=K + "salvar"):
+        if not ss[K + "nome"].strip():
+            st.error("Dê um nome ao produto.")
+            return
+        fil, imp = fils_todos.get(ss[K + "fil"]), imps_todas.get(ss[K + "imp"])
+        db.atualizar("produtos", pid, {
+            "nome": ss[K + "nome"].strip(), "categoria": ss[K + "cat"].strip(), "tipo_filamento": ss[K + "tipo"],
+            "filamento_id": fil["id"] if fil else None, "impressora_id": imp["id"] if imp else None,
+            "gramas": ss[K + "g"], "horas_impressao": ss[K + "h"], "minutos_trabalho": ss[K + "min"],
+            "custo_extra": ss[K + "extra"], "preco_venda": ss[K + "preco"], "margem_pct": ss[K + "margem"],
+            "ativo": 1 if ss[K + "ativo"] else 0})
+        db.definir_insumos_produto(pid, [(i["id"], q) for i, q in novos_ins])
+        nome = ss[K + "nome"].strip()
+        _limpar_dialogo(K)
+        salvo(f"{nome} atualizado!")
+        st.rerun()
+    if s2.button("Cancelar", use_container_width=True, key=K + "cancelar"):
+        _limpar_dialogo(K)
+        st.rerun()
+    with st.expander("🗑️ Excluir produto"):
+        st.caption("Os pedidos antigos continuam, com o nome do item. Se só parou de vender, prefira desligar "
+                   "**Ativo**.")
+        if st.checkbox(f"Sim, quero excluir {p['nome']}", key=K + "del_ok") and \
+                st.button("Excluir produto", key=K + "del"):
+            db.excluir("produtos", pid)
+            _limpar_dialogo(K)
+            salvo(f"{p['nome']} excluído")
+            st.rerun()
+
+
 def pagina_produtos():
     titulo("🏷️ Produtos & Preços")
     tab_calc, tab_cat = st.tabs(["🧮 Calculadora de preço", "📚 Catálogo de produtos"])
@@ -1407,34 +1563,31 @@ def pagina_produtos():
         imps_todas = opcoes_impressoras(apenas_ativos=False)
         t1, t2 = st.columns(2)
         so_ativos = t1.toggle("Mostrar só produtos ativos", value=True, key="cat_ativos")
-        vitrine = t2.toggle("🖼️ Ver como vitrine (fotos e preços)", value=False, key="cat_vitrine")
+        vitrine = t2.toggle("🖼️ Ver como vitrine (fotos e preços)", value=True, key="cat_vitrine")
         if so_ativos:
             produtos = [p for p in produtos if p["ativo"]]
         minis = db.miniaturas_produtos()
 
         if vitrine:
-            # Grade de quadrados pequenos, todos do mesmo tamanho (as fotos ja sao salvas quadradas)
-            cards = []
-            for p in produtos:
-                foto = db.obter_foto(p["id"])
-                img = (f'<img src="{data_uri(foto)}" alt="">' if foto
-                       else '<div class="vt-sem">📷<br>sem foto</div>')
-                cat = f'<small>{html.escape(p["categoria"])}</small>' if p["categoria"] else ""
-                cards.append(f'<div class="vt-card">{img}<b>{html.escape(p["nome"])}</b>'
-                             f'<span>{brl(p["preco_venda"])}</span>{cat}</div>')
-            css = (
-                f""".vt-grade {{display:grid; grid-template-columns:repeat(auto-fill, 150px); gap:16px; margin-bottom:8px;}}
-                .vt-card {{width:150px; font-size:.88em; line-height:1.25;}}
-                .vt-card img, .vt-sem {{width:150px; height:150px; object-fit:cover; border-radius:12px;
-                                        display:block; margin-bottom:6px; box-shadow:0 1px 4px rgba(25,10,118,.15);}}
-                .vt-sem {{background:{LAVANDA}; color:{ROXO}; display:flex; align-items:center; justify-content:center;
-                          text-align:center;}}
-                .vt-card b, .vt-card span, .vt-card small {{display:block;}}
-                .vt-card span {{color:{ROXO}; font-weight:600;}}
-                .vt-card small {{color:#6b6b8a;}}""")
-            css = " ".join(linha.strip() for linha in css.splitlines())  # sem recuo (markdown leria como codigo)
-            st.markdown(f'<style>{css}</style><div class="vt-grade">{"".join(cards)}</div>', unsafe_allow_html=True)
-            st.divider()
+            st.caption("Clique em **✏️ Editar** embaixo do produto para mudar foto, dados, itens extras e preço.")
+            st.markdown("<style>[data-testid='stImage'] img {border-radius:12px;}</style>", unsafe_allow_html=True)
+            n_col = 5
+            for i in range(0, len(produtos), n_col):
+                for col, p in zip(st.columns(n_col), produtos[i:i + n_col]):
+                    with col:
+                        foto = db.obter_foto(p["id"])
+                        if foto:
+                            st.image(foto, use_container_width=True)
+                        else:
+                            st.markdown(f'<div style="aspect-ratio:1;background:{LAVANDA};border-radius:12px;'
+                                        f'display:flex;align-items:center;justify-content:center;color:{ROXO};">'
+                                        '📷 sem foto</div>', unsafe_allow_html=True)
+                        st.markdown(f"**{p['nome']}**  \n:violet[**{brl(p['preco_venda'])}**]")
+                        if p["categoria"]:
+                            st.caption(p["categoria"])
+                        if st.button("✏️ Editar", key=f"vt_ed_{p['id']}", use_container_width=True):
+                            _limpar_dialogo(f"dlg_{p['id']}_")
+                            dialogo_produto(p["id"], cfg, medias, fils_todos, imps_todas)
 
         ins_prod = {p["id"]: db.insumos_do_produto(p["id"]) for p in produtos}
         linhas = []
@@ -1458,120 +1611,52 @@ def pagina_produtos():
                 "Prontas": p["estoque_pronto"] or 0, "Ativo": bool(p["ativo"]), "Excluir?": False,
             })
         df = pd.DataFrame(linhas)
-        st.caption("✏️ Edite direto na tabela: **cada alteração é salva na hora** e vale para todo o app "
-                   "(novos pedidos, vitrine, calculadora). Mudou o **preço**, a **margem** é recalculada; mudou a "
-                   "**margem**, o **preço** é recalculado (terminando em ,90); mudou gramas, horas ou extras, o "
-                   "**custo** muda e a margem acompanha. Gramas e horas são **por peça**. Desmarque **Ativo** para "
-                   "tirar um produto de linha sem perder o histórico.")
-        chave_cat = f"cat_editor_{ev()}"
-        edit = st.data_editor(
-            df, hide_index=True, use_container_width=True, key=chave_cat,
-            disabled=["Foto", "Insumos", "Custo", "Lucro/peça", "Prontas"],
-            on_change=_salvar_produtos_editados,
-            args=(chave_cat, list(df["id"]), fils_todos, imps_todas, cfg, medias),
-            column_config={
-                "id": None,
-                "Produto": st.column_config.TextColumn(pinned=True),
-                "Foto": st.column_config.ImageColumn(width="small", help="Envie a foto logo abaixo da tabela"),
-                "Tipo": st.column_config.SelectboxColumn(options=db.TIPOS_FILAMENTO, required=True,
-                                                         help="Define o preço médio do filamento no custo"),
-                "Filamento": st.column_config.SelectboxColumn(options=list(fils_todos),
-                                                              help="Opcional: rolo que sai do estoque ao produzir"),
-                "Impressora": st.column_config.SelectboxColumn(options=list(imps_todas)),
-                "Gramas": st.column_config.NumberColumn(format="%.0f g", min_value=0),
-                "Horas": st.column_config.NumberColumn(format="%.2f h", min_value=0),
-                "Min. trabalho": st.column_config.NumberColumn(format="%.0f min", min_value=0),
-                "Insumos": st.column_config.NumberColumn(format=DINHEIRO,
-                                                         help="Soma dos insumos do produto (edite logo abaixo)"),
-                "Outros extras": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
-                "Margem %": st.column_config.NumberColumn(format="%.0f%%", min_value=0),
-                "Preço venda": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
-                "Custo": st.column_config.NumberColumn(format=DINHEIRO),
-                "Lucro/peça": st.column_config.NumberColumn(format=DINHEIRO),
-            })
-        marcados = [int(r["id"]) for _, r in edit.iterrows() if _bool(r.get("Excluir?"))]
-        if marcados:
-            nomes_m = ", ".join(p["nome"] for p in produtos if p["id"] in marcados)
-            st.warning(f"Marcado(s) para excluir: **{nomes_m}**. Os pedidos antigos continuam, com o nome do item. "
-                       "Se só parou de vender, prefira desmarcar **Ativo**.")
-            if st.button(f"🗑️ Excluir {len(marcados)} produto(s) marcado(s)", key="cat_excluir"):
-                for pid_x in marcados:
-                    db.excluir("produtos", pid_x)
-                salvo(f"{len(marcados)} produto(s) excluído(s)")
-                st.rerun()
+        if not vitrine:
+            st.caption("✏️ Edite direto na tabela: **cada alteração é salva na hora** e vale para todo o app "
+                       "(novos pedidos, vitrine, calculadora). Mudou o **preço**, a **margem** é recalculada; mudou a "
+                       "**margem**, o **preço** é recalculado (terminando em ,90); mudou gramas, horas ou extras, o "
+                       "**custo** muda e a margem acompanha. Gramas e horas são **por peça**. Desmarque **Ativo** para "
+                       "tirar um produto de linha sem perder o histórico.")
+            chave_cat = f"cat_editor_{ev()}"
+            edit = st.data_editor(
+                df, hide_index=True, use_container_width=True, key=chave_cat,
+                disabled=["Foto", "Insumos", "Custo", "Lucro/peça", "Prontas"],
+                on_change=_salvar_produtos_editados,
+                args=(chave_cat, list(df["id"]), fils_todos, imps_todas, cfg, medias),
+                column_config={
+                    "id": None,
+                    "Produto": st.column_config.TextColumn(pinned=True),
+                    "Foto": st.column_config.ImageColumn(width="small", help="Envie a foto logo abaixo da tabela"),
+                    "Tipo": st.column_config.SelectboxColumn(options=db.TIPOS_FILAMENTO, required=True,
+                                                             help="Define o preço médio do filamento no custo"),
+                    "Filamento": st.column_config.SelectboxColumn(options=list(fils_todos),
+                                                                  help="Opcional: rolo que sai do estoque ao produzir"),
+                    "Impressora": st.column_config.SelectboxColumn(options=list(imps_todas)),
+                    "Gramas": st.column_config.NumberColumn(format="%.0f g", min_value=0),
+                    "Horas": st.column_config.NumberColumn(format="%.2f h", min_value=0),
+                    "Min. trabalho": st.column_config.NumberColumn(format="%.0f min", min_value=0),
+                    "Insumos": st.column_config.NumberColumn(format=DINHEIRO,
+                                                             help="Soma dos insumos do produto (edite logo abaixo)"),
+                    "Outros extras": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
+                    "Margem %": st.column_config.NumberColumn(format="%.0f%%", min_value=0),
+                    "Preço venda": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
+                    "Custo": st.column_config.NumberColumn(format=DINHEIRO),
+                    "Lucro/peça": st.column_config.NumberColumn(format=DINHEIRO),
+                })
+            marcados = [int(r["id"]) for _, r in edit.iterrows() if _bool(r.get("Excluir?"))]
+            if marcados:
+                nomes_m = ", ".join(p["nome"] for p in produtos if p["id"] in marcados)
+                st.warning(f"Marcado(s) para excluir: **{nomes_m}**. Os pedidos antigos continuam, com o nome do item. "
+                           "Se só parou de vender, prefira desmarcar **Ativo**.")
+                if st.button(f"🗑️ Excluir {len(marcados)} produto(s) marcado(s)", key="cat_excluir"):
+                    for pid_x in marcados:
+                        db.excluir("produtos", pid_x)
+                    salvo(f"{len(marcados)} produto(s) excluído(s)")
+                    st.rerun()
 
         prejuizo = [l["Produto"] for l in linhas if l["Lucro/peça"] < 0]
         if prejuizo:
             st.error("⚠️ Vendendo abaixo do custo: " + ", ".join(prejuizo))
-
-        # ---------- Insumos do produto
-        st.markdown("#### 🧰 Insumos de cada peça")
-        ins_opts_cat = opcoes_insumos(apenas_ativos=False)
-        if not produtos:
-            return
-        if not ins_opts_cat:
-            st.caption("Cadastre os insumos em 📦 Estoque → Insumos para ligar aos produtos.")
-        else:
-            opts_i = {f"{'🧰 ' if ins_prod.get(p['id']) else ''}{p['nome']} (#{p['id']})": p for p in produtos}
-            sel_i = st.selectbox("Produto", list(opts_i), key="ins_prod_sel",
-                                 help="Os que já têm insumos aparecem com 🧰 na frente.")
-            pi = opts_i[sel_i]
-            atuais = ins_prod.get(pi["id"], [])
-            rot_por_id = {i["id"]: k for k, i in ins_opts_cat.items()}
-            df_pi = pd.DataFrame({
-                "Insumo": pd.Series([rot_por_id.get(i["insumo_id"]) for i in atuais] or [None], dtype="object"),
-                "Qtd por peça": [float(i["qtd"]) for i in atuais] or [1.0],
-            })
-            ed_pi = st.data_editor(df_pi, num_rows="dynamic", hide_index=True, use_container_width=True,
-                                   key=f"ins_prod_editor_{pi['id']}_{ev()}",
-                                   column_config={
-                                       "Insumo": st.column_config.SelectboxColumn(options=list(ins_opts_cat),
-                                                                                  width="large"),
-                                       "Qtd por peça": st.column_config.NumberColumn(min_value=0, step=1,
-                                                                                     format="%g"),
-                                   })
-            novos = itens_insumos(ed_pi, ins_opts_cat)
-            st.caption(f"Total de insumos por peça: **{brl(sum(i['custo_unit'] * q for i, q in novos))}**. "
-                       "Para tirar um insumo, apague a linha (ou zere a quantidade). Ao registrar produção, "
-                       "esses insumos saem do estoque.")
-            if st.button("💾 Salvar insumos do produto", type="primary", key=f"ins_prod_salvar_{pi['id']}"):
-                db.definir_insumos_produto(pi["id"], [(i["id"], q) for i, q in novos])
-                salvo(f"Insumos de {pi['nome']} salvos!")
-                st.rerun()
-
-        # ---------- Foto do produto
-        st.markdown("#### 📷 Foto do produto")
-        if not produtos:
-            return
-        opts_f = {f"{'📷 ' if p['id'] in minis else ''}{p['nome']} (#{p['id']})": p for p in produtos}
-        sel_f = st.selectbox("Produto", list(opts_f), key="foto_prod",
-                             help="Os que já têm foto aparecem com 📷 na frente.")
-        pf = opts_f[sel_f]
-        atual = db.obter_foto(pf["id"])
-        f1, f2 = st.columns([1, 2])
-        with f1:
-            if atual:
-                st.image(atual, caption="Foto atual", width=170)
-            else:
-                st.caption("Esse produto ainda não tem foto.")
-        with f2:
-            st.caption("Escolha, cole ou arraste a foto, ajuste o recorte quadrado e clique em **💾 Salvar foto**.")
-            nova = editor_foto(key=f"foto_ed_{pf['id']}_{ev()}")
-            marca = f"{pf['id']}-{hash(nova)}" if nova else None
-            if nova and st.session_state.get("foto_ultima") != marca:  # cada recorte e salvo uma vez so
-                st.session_state["foto_ultima"] = marca
-                try:
-                    kb = db.salvar_foto_produto(pf["id"], nova)
-                except Exception as e:
-                    print(f"[FOTO] erro: {e}", flush=True)
-                    st.error("Não consegui abrir essa imagem. Tente uma foto em JPG ou PNG.")
-                else:
-                    salvo(f"Foto de {pf['nome']} salva ({kb} KB)")
-                    st.rerun()
-            if atual and st.button("🗑️ Remover foto", key=f"foto_rm_{pf['id']}"):
-                db.remover_foto_produto(pf["id"])
-                salvo("Foto removida")
-                st.rerun()
 
 
 # =====================================================================
