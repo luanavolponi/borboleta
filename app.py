@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.25 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.26 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -576,41 +576,38 @@ def pagina_inicio():
         ("Orçamentos pendentes", str(len(orcamentos)), AMBAR, "aguardando o cliente"),
     ])
 
-    col_a, col_b = st.columns([3, 2])
-    with col_a:
-        st.markdown("#### 🗓️ Próximas entregas")
-        if not abertos:
-            st.info("Nenhum pedido em aberto. 🎉")
-        else:
-            linhas = []
-            for p in sorted(abertos, key=lambda x: x["prazo"] or "9999"):
-                prazo = para_data(p["prazo"])
-                if not prazo:
-                    situ = "sem prazo"
-                elif prazo < hoje:
-                    situ = f"⚠️ atrasado {(hoje - prazo).days}d"
-                elif prazo == hoje:
-                    situ = "🔔 hoje"
-                else:
-                    situ = f"em {(prazo - hoje).days} dia(s)"
-                linhas.append({"Nº": p["id"], "Cliente": p["cliente"],
-                               "Status": f"{EMOJI_STATUS.get(p['status'], '')} {p['status']}",
-                               "Prazo": fmt_data(p["prazo"]), "Situação": situ,
-                               "Total": p["total"], "A receber": p["a_receber"]})
-            st.dataframe(pd.DataFrame(linhas), hide_index=True, use_container_width=True,
-                         column_config={"Total": st.column_config.NumberColumn(format=DINHEIRO),
-                                        "A receber": st.column_config.NumberColumn(format=DINHEIRO)})
-    with col_b:
-        st.markdown(f"#### 🏆 Mais vendidos {sufixo}")
-        top = db.itens_vendidos(ini, fim)[:8]
-        if not top:
-            st.caption(f"Nenhuma venda registrada {'neste período' if todos_meses else 'neste mês'}.")
-        else:
-            st.dataframe(pd.DataFrame(top).rename(columns={"item": "Item", "qtd": "Qtd",
-                                                           "receita": "Receita", "lucro": "Lucro"}),
-                         hide_index=True, use_container_width=True,
-                         column_config={"Receita": st.column_config.NumberColumn(format=DINHEIRO),
-                                        "Lucro": st.column_config.NumberColumn(format=DINHEIRO)})
+    st.markdown("#### 🗓️ Próximas entregas")
+    if not abertos:
+        st.info("Nenhum pedido em aberto. 🎉")
+    else:
+        linhas = []
+        for p in sorted(abertos, key=lambda x: x["prazo"] or "9999"):
+            prazo = para_data(p["prazo"])
+            if not prazo:
+                situ = "sem prazo"
+            elif prazo < hoje:
+                situ = f"⚠️ atrasado {(hoje - prazo).days}d"
+            elif prazo == hoje:
+                situ = "🔔 hoje"
+            else:
+                situ = f"em {(prazo - hoje).days} dia(s)"
+            linhas.append({"Nº": p["id"], "Cliente": p["cliente"],
+                           "Status": f"{EMOJI_STATUS.get(p['status'], '')} {p['status']}",
+                           "Prazo": fmt_data(p["prazo"]), "Situação": situ,
+                           "Total": p["total"], "A receber": p["a_receber"]})
+        st.dataframe(pd.DataFrame(linhas), hide_index=True, use_container_width=True,
+                     column_config={"Total": st.column_config.NumberColumn(format=DINHEIRO),
+                                    "A receber": st.column_config.NumberColumn(format=DINHEIRO)})
+    st.markdown(f"#### 🏆 Mais vendidos {sufixo}")
+    top = db.itens_vendidos(ini, fim)[:8]
+    if not top:
+        st.caption(f"Nenhuma venda registrada {'neste período' if todos_meses else 'neste mês'}.")
+    else:
+        st.dataframe(pd.DataFrame(top).rename(columns={"item": "Item", "qtd": "Qtd",
+                                                       "receita": "Receita", "lucro": "Lucro"}),
+                     hide_index=True, use_container_width=True,
+                     column_config={"Receita": st.column_config.NumberColumn(format=DINHEIRO),
+                                    "Lucro": st.column_config.NumberColumn(format=DINHEIRO)})
 
 
 # =====================================================================
