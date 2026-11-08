@@ -52,7 +52,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.45 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.46 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -585,50 +585,74 @@ def margem_do_preco(preco, custo, taxa_venda):
     return round((preco * (1 - (taxa_venda or 0) / 100) / custo - 1) * 100, 1)
 
 
-def _salvar_produtos_editados(chave, ids, fils_todos, imps_todas, cfg, medias):
-    """Salva na hora o que foi editado no catalogo e mantem preco e margem coerentes:
+def _aplicar_edicao_produto(pid, campos, fils_todos, imps_todas, cfg, medias):
+    """Grava as colunas editadas de um produto e mantem preco e margem coerentes:
     mudou o preco -> recalcula a margem; mudou a margem -> recalcula o preco (arredondado em ,90);
-    mudou algo do custo -> o preco fica e a margem acompanha."""
+    mudou algo do custo -> o preco fica e a margem acompanha. Retorna o nome (ou None se nada mudou)."""
+    dados = {}
+    for col, v in campos.items():
+        if col == "Produto" and _txt(v):
+            dados["nome"] = _txt(v)
+        elif col == "Categoria":
+            dados["categoria"] = _txt(v)
+        elif col == "Tipo" and _txt(v):
+            dados["tipo_filamento"] = _txt(v)
+        elif col == "Filamento":
+            f = fils_todos.get(_txt(v))
+            dados["filamento_id"] = f["id"] if f else None
+        elif col == "Impressora":
+            i = imps_todas.get(_txt(v))
+            dados["impressora_id"] = i["id"] if i else None
+        elif col in ("Gramas", "Horas", "Min. trabalho", "Outros extras", "Margem %", "Preço venda", "Mínimo"):
+            dados[{"Gramas": "gramas", "Horas": "horas_impressao", "Min. trabalho": "minutos_trabalho",
+                   "Outros extras": "custo_extra", "Margem %": "margem_pct", "Preço venda": "preco_venda",
+                   "Mínimo": "estoque_minimo"}[col]] = _num(v)
+        elif col == "Ativo":
+            dados["ativo"] = 1 if _bool(v) else 0
+    if not dados:
+        return None
+    db.atualizar("produtos", pid, dados)
+    p = db.obter("produtos", pid)
+    custo = db.custo_produto(p, cfg, medias)["total"]
+    taxa = cfg["taxa_venda"]
+    if "Preço venda" in campos or (CAMPOS_CUSTO & set(campos) and "Margem %" not in campos):
+        mg = margem_do_preco(p["preco_venda"], custo, taxa)
+        if mg is not None:
+            db.atualizar("produtos", pid, {"margem_pct": mg})
+    elif "Margem %" in campos and custo > 0:
+        novo = arredondar_preco(db.preco_sugerido(custo, p["margem_pct"], taxa))
+        db.atualizar("produtos", pid, {"preco_venda": novo})
+    return p["nome"]
+
+
+def _salvar_produtos_editados(chave, ids, fils_todos, imps_todas, cfg, medias):
+    """Salva na hora o que foi editado na tabela do catalogo."""
+    mudancas = (st.session_state.get(chave) or {}).get("edited_rows", {})
+    nomes = [n for n in (_aplicar_edicao_produto(int(ids[int(linha)]), campos, fils_todos, imps_todas, cfg, medias)
+                         for linha, campos in mudancas.items()) if n]
+    if nomes:
+        salvo(f"Catálogo atualizado: {', '.join(nomes)}")
+
+
+def _salvar_pecas_editadas(chave, ids, fils_todos, imps_todas, cfg, medias):
+    """Salva na hora a tabela de pecas prontas: 'Prontas' vira um ajuste de estoque (fica no historico);
+    categoria, minimo e preco vao para o catalogo (preco recalcula a margem)."""
     mudancas = (st.session_state.get(chave) or {}).get("edited_rows", {})
     nomes = []
     for linha, campos in mudancas.items():
         pid = int(ids[int(linha)])
-        dados = {}
-        for col, v in campos.items():
-            if col == "Produto" and _txt(v):
-                dados["nome"] = _txt(v)
-            elif col == "Categoria":
-                dados["categoria"] = _txt(v)
-            elif col == "Tipo" and _txt(v):
-                dados["tipo_filamento"] = _txt(v)
-            elif col == "Filamento":
-                f = fils_todos.get(_txt(v))
-                dados["filamento_id"] = f["id"] if f else None
-            elif col == "Impressora":
-                i = imps_todas.get(_txt(v))
-                dados["impressora_id"] = i["id"] if i else None
-            elif col in ("Gramas", "Horas", "Min. trabalho", "Outros extras", "Margem %", "Preço venda"):
-                dados[{"Gramas": "gramas", "Horas": "horas_impressao", "Min. trabalho": "minutos_trabalho",
-                       "Outros extras": "custo_extra", "Margem %": "margem_pct",
-                       "Preço venda": "preco_venda"}[col]] = _num(v)
-            elif col == "Ativo":
-                dados["ativo"] = 1 if _bool(v) else 0
-        if not dados:
-            continue
-        db.atualizar("produtos", pid, dados)
-        p = db.obter("produtos", pid)
-        custo = db.custo_produto(p, cfg, medias)["total"]
-        taxa = cfg["taxa_venda"]
-        if "Preço venda" in campos or (CAMPOS_CUSTO & set(campos) and "Margem %" not in campos):
-            mg = margem_do_preco(p["preco_venda"], custo, taxa)
-            if mg is not None:
-                db.atualizar("produtos", pid, {"margem_pct": mg})
-        elif "Margem %" in campos and custo > 0:
-            novo = arredondar_preco(db.preco_sugerido(custo, p["margem_pct"], taxa))
-            db.atualizar("produtos", pid, {"preco_venda": novo})
-        nomes.append(p["nome"])
+        if "Prontas" in campos:
+            p = db.obter("produtos", pid)
+            dif = int(_num(campos["Prontas"])) - int(p["estoque_pronto"] or 0)
+            if dif:
+                db.ajustar_estoque("produto", pid, dif, "Conferência (tabela de peças prontas)")
+                nomes.append(p["nome"])
+        outros = {k: v for k, v in campos.items() if k != "Prontas"}
+        nome = _aplicar_edicao_produto(pid, outros, fils_todos, imps_todas, cfg, medias) if outros else None
+        if nome and nome not in nomes:
+            nomes.append(nome)
     if nomes:
-        salvo(f"Catálogo atualizado: {', '.join(nomes)}")
+        salvo(f"Atualizado: {', '.join(nomes)}")
 
 
 COLUNAS_CLIENTE = {"Nome": "nome", "WhatsApp": "telefone", "Instagram": "instagram", "E-mail": "email",
@@ -2013,14 +2037,31 @@ def pagina_estoque():
                         salvo("Estoque de peças ajustado!")
                         st.rerun()
             df = pd.DataFrame([{
-                "Produto": p["nome"], "Categoria": p["categoria"] or "", "Prontas": p["estoque_pronto"] or 0,
-                "Mínimo": p["estoque_minimo"] or 0,
+                "Produto": p["nome"], "Categoria": p["categoria"] or "",
+                "Prontas": int(p["estoque_pronto"] or 0), "Mínimo": int(p["estoque_minimo"] or 0),
                 "Situação": "🟡 Produzir" if (p["estoque_minimo"] or 0) > 0 and
                 (p["estoque_pronto"] or 0) < p["estoque_minimo"] else "🟢 OK",
-                "Valor de venda": (p["estoque_pronto"] or 0) * (p["preco_venda"] or 0),
+                "Preço venda": float(p["preco_venda"] or 0),
+                "Valor em estoque": (p["estoque_pronto"] or 0) * (p["preco_venda"] or 0),
             } for p in prods])
-            st.dataframe(df, hide_index=True, use_container_width=True,
-                         column_config={"Valor de venda": st.column_config.NumberColumn(format=DINHEIRO)})
+            st.caption("✏️ Edite **Prontas, Mínimo, Categoria e Preço de venda** direto na tabela: salva na hora. "
+                       "Mudar *Prontas* corrige o estoque (fica no 📜 Histórico); categoria e preço também mudam no "
+                       "catálogo (o preço recalcula a margem). *Valor em estoque* = prontas × preço.")
+            cfg_e = db.get_config()
+            chave_pecas = f"pecas_editor_{ev()}"
+            st.data_editor(
+                df, hide_index=True, use_container_width=True, key=chave_pecas,
+                disabled=["Produto", "Situação", "Valor em estoque"],
+                on_change=_salvar_pecas_editadas,
+                args=(chave_pecas, [p["id"] for p in prods], opcoes_filamentos(apenas_ativos=False),
+                      opcoes_impressoras(apenas_ativos=False), cfg_e, db.medias_filamento(cfg_e)),
+                column_config={
+                    "Produto": st.column_config.TextColumn(pinned=True, width="large"),
+                    "Prontas": st.column_config.NumberColumn(min_value=0, step=1, format="%d"),
+                    "Mínimo": st.column_config.NumberColumn(min_value=0, step=1, format="%d",
+                                                            help="Avisa para produzir quando tiver menos que isso"),
+                    "Preço venda": st.column_config.NumberColumn(min_value=0, format=DINHEIRO),
+                    "Valor em estoque": st.column_config.NumberColumn(format=DINHEIRO)})
 
     # ---------- Historico
     with tab_hist:
