@@ -1037,8 +1037,35 @@ def aplicar_importacao(dados, usuario="Importação"):
                           itens, usuario=usuario, c=c, data_recebimento=pd_.get("data_recebimento") or pd_["data"])
             n_ped += 1
 
+        # Pedidos lancados em dobro: so age se forem do mesmo cliente e com os mesmos itens.
+        # Fica o que tem mais valor recebido (empate: o mais antigo); os outros sao excluidos
+        # como no botao do app (devolve o estoque e tira o recebimento do Financeiro).
+        n_dup = 0
+        for dup in dados.get("pedidos_duplicados", []):
+            ids = [int(i) for i in dup.get("ids", [])]
+            ps = [dict(r) for r in c.execute(
+                f"""SELECT p.*, COALESCE(cl.nome, '') AS cliente,
+                           (SELECT GROUP_CONCAT(qtd || 'x' || descricao || '@' || preco_unit, ';') FROM
+                               (SELECT * FROM pedido_itens WHERE pedido_id = p.id ORDER BY descricao, qtd)) AS itens
+                    FROM pedidos p LEFT JOIN clientes cl ON cl.id = p.cliente_id
+                    WHERE p.id IN ({','.join('?' for _ in ids)})""", ids)]
+            cliente = (dup.get("cliente") or "").lower()
+            if (len(ids) < 2 or len(ps) != len(ids) or len({p["itens"] for p in ps}) != 1
+                    or any(cliente not in p["cliente"].lower() for p in ps)):
+                print(f"[IMPORTACAO] pedidos {ids} nao conferem como repetidos: nada foi excluido", flush=True)
+                pulados += 1
+                continue
+            manter = max(ps, key=lambda p: (p["valor_recebido"] or 0, -p["id"]))
+            for p in ps:
+                if p["id"] != manter["id"]:
+                    _desfazer_baixa(c, p["id"])
+                    c.execute("DELETE FROM lancamentos WHERE pedido_id=?", (p["id"],))
+                    c.execute("DELETE FROM pedidos WHERE id=?", (p["id"],))
+                    n_dup += 1
+
         resumo = (f"Importado: {n_desp} despesa(s) no Financeiro, {n_fil} filamento(s), {n_ins} insumo(s)"
                   f", {n_imp} impressora(s), {n_prod} produto(s), {n_cli} cliente(s) e {n_ped} pedido(s)"
+                  + (f" · {n_dup} pedido(s) repetido(s) excluído(s)" if n_dup else "")
                   + (f" · {pulados} item(ns) já existiam e foram pulados" if pulados else ""))
         c.execute("INSERT INTO importacoes(id, quando, resumo) VALUES (?,?,?)",
                   (dados["id"], datetime.now().strftime("%Y-%m-%d %H:%M"), resumo))
