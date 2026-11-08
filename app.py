@@ -53,7 +53,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.39 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.40 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -517,6 +517,62 @@ def _salvar_pedidos_editados(chave, ids, cli_rot, status_rot):
     if feitos:
         st.session_state["ped_v"] = st.session_state.get("ped_v", 0) + 1  # o formulario abaixo recarrega
         salvo(f"Pedido {', '.join(feitos)} salvo!")
+
+
+CAMPOS_CUSTO = {"Tipo", "Impressora", "Gramas", "Horas", "Min. trabalho", "Outros extras"}
+
+
+def margem_do_preco(preco, custo, taxa_venda):
+    """Margem % que leva o custo ate o preco (inverso de db.preco_sugerido). None se nao da para calcular."""
+    if not custo or custo <= 0 or not preco:
+        return None
+    return round((preco * (1 - (taxa_venda or 0) / 100) / custo - 1) * 100, 1)
+
+
+def _salvar_produtos_editados(chave, ids, fils_todos, imps_todas, cfg, medias):
+    """Salva na hora o que foi editado no catalogo e mantem preco e margem coerentes:
+    mudou o preco -> recalcula a margem; mudou a margem -> recalcula o preco (arredondado em ,90);
+    mudou algo do custo -> o preco fica e a margem acompanha."""
+    mudancas = (st.session_state.get(chave) or {}).get("edited_rows", {})
+    nomes = []
+    for linha, campos in mudancas.items():
+        pid = int(ids[int(linha)])
+        dados = {}
+        for col, v in campos.items():
+            if col == "Produto" and _txt(v):
+                dados["nome"] = _txt(v)
+            elif col == "Categoria":
+                dados["categoria"] = _txt(v)
+            elif col == "Tipo" and _txt(v):
+                dados["tipo_filamento"] = _txt(v)
+            elif col == "Filamento":
+                f = fils_todos.get(_txt(v))
+                dados["filamento_id"] = f["id"] if f else None
+            elif col == "Impressora":
+                i = imps_todas.get(_txt(v))
+                dados["impressora_id"] = i["id"] if i else None
+            elif col in ("Gramas", "Horas", "Min. trabalho", "Outros extras", "Margem %", "Preço venda"):
+                dados[{"Gramas": "gramas", "Horas": "horas_impressao", "Min. trabalho": "minutos_trabalho",
+                       "Outros extras": "custo_extra", "Margem %": "margem_pct",
+                       "Preço venda": "preco_venda"}[col]] = _num(v)
+            elif col == "Ativo":
+                dados["ativo"] = 1 if _bool(v) else 0
+        if not dados:
+            continue
+        db.atualizar("produtos", pid, dados)
+        p = db.obter("produtos", pid)
+        custo = db.custo_produto(p, cfg, medias)["total"]
+        taxa = cfg["taxa_venda"]
+        if "Preço venda" in campos or (CAMPOS_CUSTO & set(campos) and "Margem %" not in campos):
+            mg = margem_do_preco(p["preco_venda"], custo, taxa)
+            if mg is not None:
+                db.atualizar("produtos", pid, {"margem_pct": mg})
+        elif "Margem %" in campos and custo > 0:
+            novo = arredondar_preco(db.preco_sugerido(custo, p["margem_pct"], taxa))
+            db.atualizar("produtos", pid, {"preco_venda": novo})
+        nomes.append(p["nome"])
+    if nomes:
+        salvo(f"Catálogo atualizado: {', '.join(nomes)}")
 
 
 COLUNAS_CLIENTE = {"Nome": "nome", "WhatsApp": "telefone", "Instagram": "instagram", "E-mail": "email",
@@ -1402,14 +1458,20 @@ def pagina_produtos():
                 "Prontas": p["estoque_pronto"] or 0, "Ativo": bool(p["ativo"]), "Excluir?": False,
             })
         df = pd.DataFrame(linhas)
-        st.caption("Gramas e horas são **por peça** (a calculadora já divide a bandeja). "
-                   "Edite os dados e clique em **Salvar**. *Custo*, *Sugerido* e *Lucro/peça* são recalculados "
-                   "ao salvar. Desmarque **Ativo** para tirar um produto de linha sem perder o histórico.")
+        st.caption("✏️ Edite direto na tabela: **cada alteração é salva na hora** e vale para todo o app "
+                   "(novos pedidos, vitrine, calculadora). Mudou o **preço**, a **margem** é recalculada; mudou a "
+                   "**margem**, o **preço** é recalculado (terminando em ,90); mudou gramas, horas ou extras, o "
+                   "**custo** muda e a margem acompanha. Gramas e horas são **por peça**. Desmarque **Ativo** para "
+                   "tirar um produto de linha sem perder o histórico.")
+        chave_cat = f"cat_editor_{ev()}"
         edit = st.data_editor(
-            df, hide_index=True, use_container_width=True, key=f"cat_editor_{ev()}",
+            df, hide_index=True, use_container_width=True, key=chave_cat,
             disabled=["Foto", "Insumos", "Custo", "Sugerido", "Lucro/peça", "Prontas"],
+            on_change=_salvar_produtos_editados,
+            args=(chave_cat, list(df["id"]), fils_todos, imps_todas, cfg, medias),
             column_config={
                 "id": None,
+                "Produto": st.column_config.TextColumn(pinned=True),
                 "Foto": st.column_config.ImageColumn(width="small", help="Envie a foto logo abaixo da tabela"),
                 "Tipo": st.column_config.SelectboxColumn(options=db.TIPOS_FILAMENTO, required=True,
                                                          help="Define o preço médio do filamento no custo"),
@@ -1428,20 +1490,16 @@ def pagina_produtos():
                 "Sugerido": st.column_config.NumberColumn(format=DINHEIRO),
                 "Lucro/peça": st.column_config.NumberColumn(format=DINHEIRO),
             })
-        if st.button("💾 Salvar catálogo", type="primary", key="cat_salvar"):
-            def conv(r):
-                f = fils_todos.get(_txt(r["Filamento"]))
-                i = imps_todas.get(_txt(r["Impressora"]))
-                return {"nome": _txt(r["Produto"]) or "Sem nome", "categoria": _txt(r["Categoria"]),
-                        "tipo_filamento": _txt(r["Tipo"]) or "Simples",
-                        "filamento_id": f["id"] if f else None, "impressora_id": i["id"] if i else None,
-                        "gramas": _num(r["Gramas"]), "horas_impressao": _num(r["Horas"]),
-                        "minutos_trabalho": _num(r["Min. trabalho"]), "custo_extra": _num(r["Outros extras"]),
-                        "margem_pct": _num(r["Margem %"]), "preco_venda": _num(r["Preço venda"]),
-                        "ativo": 1 if _bool(r["Ativo"]) else 0}
-            aplicar_edicoes("produtos", edit, conv)
-            salvo("Catálogo salvo!")
-            st.rerun()
+        marcados = [int(r["id"]) for _, r in edit.iterrows() if _bool(r.get("Excluir?"))]
+        if marcados:
+            nomes_m = ", ".join(p["nome"] for p in produtos if p["id"] in marcados)
+            st.warning(f"Marcado(s) para excluir: **{nomes_m}**. Os pedidos antigos continuam, com o nome do item. "
+                       "Se só parou de vender, prefira desmarcar **Ativo**.")
+            if st.button(f"🗑️ Excluir {len(marcados)} produto(s) marcado(s)", key="cat_excluir"):
+                for pid_x in marcados:
+                    db.excluir("produtos", pid_x)
+                salvo(f"{len(marcados)} produto(s) excluído(s)")
+                st.rerun()
 
         prejuizo = [l["Produto"] for l in linhas if l["Lucro/peça"] < 0]
         if prejuizo:
