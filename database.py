@@ -219,6 +219,7 @@ def init_db():
         """)
         # Migracoes: colunas novas em bancos ja existentes
         for tabela, col, tipo in [("filamentos", "tipo", "TEXT DEFAULT 'Simples'"),
+                                  ("insumos", "item_extra", "INTEGER DEFAULT 1"),
                                   ("produtos", "tipo_filamento", "TEXT"),
                                   # Endereco do cliente (cidade ja existia)
                                   ("clientes", "cep", "TEXT DEFAULT ''"), ("clientes", "endereco", "TEXT DEFAULT ''"),
@@ -274,7 +275,7 @@ _COLUNAS = {
     "impressoras": ["nome", "potencia_w", "valor_compra", "vida_util_horas", "ativa"],
     "filamentos": ["material", "cor", "marca", "preco_rolo", "peso_rolo_g", "estoque_g",
                    "estoque_minimo_g", "obs", "ativo", "tipo"],
-    "insumos": ["nome", "unidade", "custo_unit", "estoque", "estoque_minimo", "ativo"],
+    "insumos": ["nome", "unidade", "custo_unit", "estoque", "estoque_minimo", "ativo", "item_extra"],
     "produtos": ["nome", "categoria", "filamento_id", "impressora_id", "gramas", "horas_impressao",
                  "minutos_trabalho", "custo_extra", "margem_pct", "preco_venda", "estoque_pronto",
                  "estoque_minimo", "obs", "ativo", "tipo_filamento"],
@@ -944,16 +945,17 @@ def aplicar_importacao(dados, usuario="Importação"):
             if c.execute("SELECT 1 FROM insumos WHERE lower(nome)=lower(?)", (i["nome"],)).fetchone():
                 pulados += 1
                 continue
-            cur = c.execute("""INSERT INTO insumos(nome, unidade, custo_unit, estoque, estoque_minimo, ativo)
-                               VALUES (?,?,?,0,?,1)""",
-                            (i["nome"], i.get("unidade", "un"), i.get("custo_unit", 0), i.get("estoque_minimo", 0)))
+            cur = c.execute("""INSERT INTO insumos(nome, unidade, custo_unit, estoque, estoque_minimo, ativo, item_extra)
+                               VALUES (?,?,?,0,?,1,?)""",
+                            (i["nome"], i.get("unidade", "un"), i.get("custo_unit", 0), i.get("estoque_minimo", 0),
+                             1 if i.get("item_extra", True) else 0))
             if i.get("quantidade", 0) > 0:
                 _mover(c, "insumo", cur.lastrowid, i["quantidade"], "Estoque inicial (importação)")
             n_ins += 1
 
         for u in dados.get("atualizar_insumos", []):
             # Atualiza campos de um insumo que ja existe (pelo nome), ex.: custo por unidade
-            campos = {k: u[k] for k in ("custo_unit", "estoque_minimo", "unidade") if k in u}
+            campos = {k: u[k] for k in ("custo_unit", "estoque_minimo", "unidade", "item_extra") if k in u}
             if campos:
                 cur = c.execute(f"UPDATE insumos SET {', '.join(k + '=?' for k in campos)} WHERE lower(nome)=lower(?)",
                                 list(campos.values()) + [u["nome"]])

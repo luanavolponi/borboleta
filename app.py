@@ -52,7 +52,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.42 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.43 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -413,9 +413,13 @@ def opcoes_impressoras(apenas_ativos=True):
     return {f"#{i['id']} {i['nome']}": i for i in db.listar("impressoras", apenas_ativos)}
 
 
-def opcoes_insumos(apenas_ativos=True):
+def opcoes_insumos(apenas_ativos=True, so_extras=False, incluir_ids=()):
+    """Insumos para escolher. so_extras: so os marcados como 'Item extra?' no Estoque
+    (mais os de incluir_ids, ja ligados ao produto, para nao sumirem do custo)."""
     return {f"{i['nome']} · {brl(i['custo_unit'] or 0)}/{i['unidade'] or 'un'} (#{i['id']})": i
-            for i in db.listar("insumos", apenas_ativos)}
+            for i in db.listar("insumos", apenas_ativos)
+            if not so_extras or (i.get("item_extra") if i.get("item_extra") is not None else 1)
+            or i["id"] in incluir_ids}
 
 
 def itens_insumos(df, opcoes):
@@ -530,6 +534,33 @@ def _salvar_pedidos_editados(chave, ids, cli_rot, status_rot):
     if feitos:
         st.session_state["ped_v"] = st.session_state.get("ped_v", 0) + 1  # o formulario abaixo recarrega
         salvo(f"Pedido {', '.join(feitos)} salvo!")
+
+
+COLUNAS_INSUMO = {"Insumo": "nome", "Unidade": "unidade", "Custo un.": "custo_unit", "Mínimo": "estoque_minimo",
+                  "Ativo": "ativo", "Item extra?": "item_extra"}
+
+
+def _salvar_insumos_editados(chave, ids):
+    """Salva na hora o que foi editado na tabela de insumos do Estoque."""
+    mudancas = (st.session_state.get(chave) or {}).get("edited_rows", {})
+    nomes = []
+    for linha, campos in mudancas.items():
+        dados = {}
+        for col, v in campos.items():
+            campo = COLUNAS_INSUMO.get(col)
+            if campo in ("nome", "unidade"):
+                if _txt(v):
+                    dados[campo] = _txt(v)
+            elif campo in ("custo_unit", "estoque_minimo"):
+                dados[campo] = _num(v)
+            elif campo in ("ativo", "item_extra"):
+                dados[campo] = 1 if _bool(v) else 0
+        if dados:
+            iid = int(ids[int(linha)])
+            db.atualizar("insumos", iid, dados)
+            nomes.append((db.obter("insumos", iid) or {}).get("nome", ""))
+    if nomes:
+        salvo(f"Insumo salvo: {', '.join(nomes)}")
 
 
 CAMPOS_CUSTO = {"Tipo", "Impressora", "Gramas", "Horas", "Min. trabalho", "Outros extras"}
@@ -1345,7 +1376,8 @@ def dialogo_produto(pid, cfg, medias, fils_todos, imps_todas):
         c.number_input("Minutos de trabalho manual", min_value=0.0, step=1.0, format="%.0f", key=K + "min")
 
     st.markdown("**🧰 Itens extras por peça** (embalagem, argola, cartão…)")
-    ins_opts = opcoes_insumos(apenas_ativos=False)
+    ins_opts = opcoes_insumos(apenas_ativos=False, so_extras=True,
+                              incluir_ids={i["insumo_id"] for i in db.insumos_do_produto(pid)})
     if K + "ins_df" not in ss:
         rot = {i["id"]: k for k, i in ins_opts.items()}
         atuais = db.insumos_do_produto(pid)
@@ -1455,7 +1487,7 @@ def pagina_produtos():
             min_trab = st.number_input("Seu trabalho manual por peça (minutos)", min_value=0.0, step=5.0,
                                        key="calc_trab", help="Tirar suporte, lixar, pintar, montar, embalar...")
             st.markdown("**Extras de cada peça** (embalagem, argola, ímã, tag…)")
-            ins_opts = opcoes_insumos()
+            ins_opts = opcoes_insumos(so_extras=True)
             if ins_opts:
                 ed_ins = st.data_editor(
                     pd.DataFrame({"Insumo": pd.Series([None], dtype="object"), "Qtd por peça": [1.0]}),
@@ -1828,13 +1860,16 @@ def pagina_estoque():
                     custo_u = st.number_input("Custo por unidade (R$)", min_value=0.0, step=0.1)
                     est_ini = st.number_input("Quantidade que já tem", min_value=0.0, step=1.0)
                     minimo = st.number_input("Avisar quando tiver menos de", min_value=0.0, step=1.0)
+                    extra = st.checkbox("Usar como item extra dos produtos", value=True,
+                                        help="Desmarque para cola, tinta, ferramentas: o que não dá para contar por peça")
                     if st.form_submit_button("Cadastrar", type="primary"):
                         if not nome.strip():
                             st.error("Informe o nome.")
                         else:
                             iid = db.inserir("insumos", {"nome": nome.strip(), "unidade": unidade,
                                                          "custo_unit": custo_u, "estoque": 0,
-                                                         "estoque_minimo": minimo, "ativo": 1})
+                                                         "estoque_minimo": minimo, "ativo": 1,
+                                                         "item_extra": 1 if extra else 0})
                             if est_ini > 0:
                                 db.ajustar_estoque("insumo", iid, est_ini, "Estoque inicial")
                             salvo("Insumo cadastrado!")
@@ -1871,19 +1906,30 @@ def pagina_estoque():
                 "Mínimo": i["estoque_minimo"] or 0.0,
                 "Situação": "🔴 Comprar" if (i["estoque_minimo"] or 0) > 0 and (i["estoque"] or 0) <= i["estoque_minimo"]
                 else "🟢 OK",
+                "Item extra?": bool(i.get("item_extra", 1) if i.get("item_extra") is not None else 1),
                 "Ativo": bool(i["ativo"]), "Excluir?": False,
             } for i in insumos])
-            edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"ins_editor_{ev()}",
+            st.caption("✏️ Cada alteração é salva na hora. **Item extra?** marcado = aparece na lista de itens "
+                       "extras dos produtos e da calculadora (para embalagem, argola, cartão…). Desmarque o que não "
+                       "dá para contar por peça, como cola ou ferramentas.")
+            chave_ins = f"ins_editor_{ev()}"
+            edit = st.data_editor(df, hide_index=True, use_container_width=True, key=chave_ins,
                                   disabled=["Em estoque", "Situação"],
+                                  on_change=_salvar_insumos_editados, args=(chave_ins, list(df["id"])),
                                   column_config={"id": None,
-                                                 "Custo un.": st.column_config.NumberColumn(format=DINHEIRO)})
-            if st.button("💾 Salvar insumos", type="primary", key="ins_salvar"):
-                aplicar_edicoes("insumos", edit, lambda r: {
-                    "nome": _txt(r["Insumo"]) or "?", "unidade": _txt(r["Unidade"]) or "un",
-                    "custo_unit": _num(r["Custo un."]), "estoque_minimo": _num(r["Mínimo"]),
-                    "ativo": 1 if _bool(r["Ativo"]) else 0})
-                salvo("Insumos salvos!")
-                st.rerun()
+                                                 "Insumo": st.column_config.TextColumn(pinned=True),
+                                                 "Custo un.": st.column_config.NumberColumn(format=DINHEIRO),
+                                                 "Item extra?": st.column_config.CheckboxColumn(
+                                                     help="Aparece na lista de itens extras dos produtos")})
+            marcados = [int(r["id"]) for _, r in edit.iterrows() if _bool(r.get("Excluir?"))]
+            if marcados:
+                nomes_m = ", ".join(i["nome"] for i in insumos if i["id"] in marcados)
+                st.warning(f"Marcado(s) para excluir: **{nomes_m}**. Se só não usa mais, prefira desmarcar **Ativo**.")
+                if st.button(f"🗑️ Excluir {len(marcados)} insumo(s) marcado(s)", key="ins_excluir"):
+                    for iid in marcados:
+                        db.excluir("insumos", iid)
+                    salvo(f"{len(marcados)} insumo(s) excluído(s)")
+                    st.rerun()
 
     # ---------- Pecas prontas
     with tab_prod:
