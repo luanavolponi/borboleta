@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.31 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.32 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -760,12 +760,28 @@ def pagina_pedidos():
     peds = db.listar_pedidos(status_sel or None, ini, fim) if status_sel else []
     if peds:
         validos = [p for p in peds if p["status"] not in ("Orçamento", "Cancelado")]
-        linha_cards([
-            ("Pedidos", str(len(peds)), ROXO, ""),
-            ("Total vendido", brl(sum(p["total"] for p in validos)), VERDE, "sem orçamentos/cancelados"),
-            ("A receber", brl(sum(p["a_receber"] for p in validos)), AMBAR, ""),
-            ("Lucro estimado", brl(sum(p["lucro"] for p in validos)), ROSA, "vendas − custo das peças"),
-        ])
+        visao = st.radio("Visão", ["💰 Visão financeira", "📦 Status dos pedidos"], horizontal=True,
+                         key="ped_visao", label_visibility="collapsed")
+        if visao.startswith("💰"):
+            linha_cards([
+                ("Pedidos", str(len(peds)), ROXO, ""),
+                ("Total vendido", brl(sum(p["total"] for p in validos)), VERDE, "sem orçamentos/cancelados"),
+                ("A receber", brl(sum(p["a_receber"] for p in validos)), AMBAR, ""),
+                ("Lucro estimado", brl(sum(p["lucro"] for p in validos)), ROSA, "vendas − custo das peças"),
+            ])
+        else:
+            # Todas as fases no periodo escolhido (o filtro de status nao se aplica aqui)
+            do_periodo = db.listar_pedidos(None, ini, fim)
+            cores = {"Orçamento": AMBAR, "Confirmado": AZUL, "Produzindo": LARANJA, "Pronto": ROXO,
+                     "Entregue": VERDE, "Cancelado": "#9e9e9e"}
+            cards_st = []
+            for s in db.STATUS_PEDIDO:
+                ps = [p for p in do_periodo if p["status"] == s]
+                cards_st.append((f"{EMOJI_STATUS.get(s, '')} {s}", str(len(ps)), cores.get(s, ROXO),
+                                 f"{brl(sum(p['total'] for p in ps))} em pedidos" if ps else "nenhum"))
+            linha_cards(cards_st[:3])
+            linha_cards(cards_st[3:])
+            st.caption("Conta os pedidos de todas as fases no período escolhido acima.")
         clientes_tab = db.listar("clientes")
         nomes_cli = [c["nome"] for c in clientes_tab]
         cli_rot = {SEM_CLIENTE: None}
