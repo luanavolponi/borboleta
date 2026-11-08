@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.28 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.29 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -444,6 +444,27 @@ def aplicar_edicoes(tabela, df_editado, converter):
             db.atualizar(tabela, rid, dados)
             alterados += 1
     return alterados, excluidos
+
+
+COLUNAS_CLIENTE = {"Nome": "nome", "WhatsApp": "telefone", "Instagram": "instagram", "E-mail": "email",
+                   "CEP": "cep", "Rua": "endereco", "Número": "numero", "Complemento": "complemento",
+                   "Bairro": "bairro", "Cidade": "cidade", "UF": "uf", "Obs": "obs"}
+
+
+def _salvar_clientes_editados(chave, ids):
+    """Salva na hora o que foi editado na tabela de clientes (o pedido mostra o cliente pelo id, entao muda junto)."""
+    mudancas = (st.session_state.get(chave) or {}).get("edited_rows", {})
+    nomes = []
+    for linha, campos in mudancas.items():
+        dados = {COLUNAS_CLIENTE[c]: _txt(v) for c, v in campos.items() if c in COLUNAS_CLIENTE}
+        if "nome" in dados and not dados["nome"]:
+            dados["nome"] = "Sem nome"
+        if dados:
+            cid = int(ids[int(linha)])
+            db.atualizar("clientes", cid, dados)
+            nomes.append((db.obter("clientes", cid) or {}).get("nome", ""))
+    if nomes:
+        salvo(f"Cliente salvo: {', '.join(nomes)}")
 
 
 # =====================================================================
@@ -936,21 +957,26 @@ def pagina_clientes():
         "Último pedido": fmt_data(stats.get(c["id"], {}).get("ultimo")),
         "Excluir?": False,
     } for c in clientes], columns=colunas)
-    st.caption("Edite direto na tabela (arraste para o lado para ver o endereço) e clique em **Salvar alterações**.")
-    edit = st.data_editor(df, hide_index=True, use_container_width=True, key=f"cli_editor_{termo}_{ev()}",
+    st.caption("✏️ Edite direto na tabela (arraste para o lado para ver o endereço). **Cada alteração é salva "
+               "na hora** e já aparece nos pedidos, no histórico e em todo o app.")
+    chave_cli = f"cli_editor_{termo}_{ev()}"
+    edit = st.data_editor(df, hide_index=True, use_container_width=True, key=chave_cli,
                           disabled=["Pedidos", "Total comprado", "Último pedido"],
+                          on_change=_salvar_clientes_editados, args=(chave_cli, list(df["id"])),
                           column_config={"id": None,
                                          "UF": st.column_config.SelectboxColumn(options=db.UFS),
-                                         "Total comprado": st.column_config.NumberColumn(format=DINHEIRO)})
-    if st.button("💾 Salvar alterações", type="primary", key="cli_salvar"):
-        alt, exc = aplicar_edicoes("clientes", edit, lambda r: {
-            "nome": _txt(r["Nome"]) or "Sem nome", "telefone": _txt(r["WhatsApp"]),
-            "instagram": _txt(r["Instagram"]), "email": _txt(r["E-mail"]), "cep": _txt(r["CEP"]),
-            "endereco": _txt(r["Rua"]), "numero": _txt(r["Número"]), "complemento": _txt(r["Complemento"]),
-            "bairro": _txt(r["Bairro"]), "cidade": _txt(r["Cidade"]), "uf": _txt(r["UF"]),
-            "obs": _txt(r["Obs"])})
-        salvo(f"Clientes salvos ({exc} excluído(s))" if exc else "Clientes salvos!")
-        st.rerun()
+                                         "Total comprado": st.column_config.NumberColumn(format=DINHEIRO),
+                                         "Excluir?": st.column_config.CheckboxColumn(
+                                             help="Marque e clique em 'Excluir clientes marcados'")})
+    marcados = [int(r["id"]) for _, r in edit.iterrows() if _bool(r.get("Excluir?"))]
+    if marcados:
+        nomes = ", ".join(c["nome"] for c in clientes if c["id"] in marcados)
+        st.warning(f"Marcado(s) para excluir: **{nomes}**. Os pedidos dele(s) continuam, mas ficam sem cliente.")
+        if st.button(f"🗑️ Excluir {len(marcados)} cliente(s) marcado(s)", key="cli_excluir"):
+            for cid in marcados:
+                db.excluir("clientes", cid)
+            salvo(f"{len(marcados)} cliente(s) excluído(s)")
+            st.rerun()
 
     st.divider()
     st.markdown("#### 📜 Histórico de um cliente")
