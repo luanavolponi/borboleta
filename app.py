@@ -52,7 +52,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.44 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.45 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -1963,7 +1963,7 @@ def pagina_estoque():
                                   disabled=["Em estoque", "Situação"],
                                   on_change=_salvar_insumos_editados, args=(chave_ins, list(df["id"])),
                                   column_config={"id": None,
-                                                 "Insumo": st.column_config.TextColumn(pinned=True),
+                                                 "Insumo": st.column_config.TextColumn(pinned=True, width="large"),
                                                  "Custo un.": st.column_config.NumberColumn(format=DINHEIRO),
                                                  "Item extra?": st.column_config.CheckboxColumn(
                                                      help="Aparece na lista de itens extras dos produtos")})

@@ -991,6 +991,8 @@ def aplicar_importacao(dados, usuario="Importação"):
         for u in dados.get("atualizar_insumos", []):
             # Atualiza campos de um insumo que ja existe (pelo nome), ex.: custo por unidade
             campos = {k: u[k] for k in ("custo_unit", "estoque_minimo", "unidade", "item_extra") if k in u}
+            if u.get("novo_nome"):
+                campos["nome"] = u["novo_nome"]  # renomear o insumo
             if campos:
                 cur = c.execute(f"UPDATE insumos SET {', '.join(k + '=?' for k in campos)} WHERE lower(nome)=lower(?)",
                                 list(campos.values()) + [u["nome"]])
