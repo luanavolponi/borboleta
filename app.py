@@ -458,7 +458,7 @@ def _salvar_clientes_editados(chave, ids):
     for linha, campos in mudancas.items():
         dados = {COLUNAS_CLIENTE[c]: _txt(v) for c, v in campos.items() if c in COLUNAS_CLIENTE}
         if "nome" in dados and not dados["nome"]:
-            dados["nome"] = "Sem nome"
+            del dados["nome"]  # nome apagado sem querer: mantem o anterior
         if dados:
             cid = int(ids[int(linha)])
             db.atualizar("clientes", cid, dados)
