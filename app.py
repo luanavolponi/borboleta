@@ -16,6 +16,31 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 from PIL import Image
+from streamlit.delta_generator import DeltaGenerator
+
+
+# O Streamlit le "$...$" como formula matematica: "R$ 10 ... R$ 20" virava texto embaralhado.
+# Nos textos simples (sem HTML), o "$" passa a aparecer sempre como cifrao.
+def _cifrao_literal(funcao, tem_html, metodo):
+    pos = 1 if metodo else 0  # metodo da classe: o 1o argumento e a propria coluna/container
+
+    def envolvida(*args, **kwargs):
+        com_html = tem_html and (kwargs.get("unsafe_allow_html") or (len(args) > pos + 1 and args[pos + 1] is True))
+        if len(args) > pos and isinstance(args[pos], str) and not com_html:
+            texto = args[pos].replace("\\$", "$").replace("$", "\\$")
+            args = args[:pos] + (texto,) + args[pos + 1:]
+        return funcao(*args, **kwargs)
+    envolvida._cifrao = True
+    return envolvida
+
+
+# O app.py roda de novo a cada clique, mas o modulo streamlit nao: so envolve uma vez
+if not getattr(st.markdown, "_cifrao", False):
+    for _nome, _html in [("markdown", True), ("caption", True), ("success", False), ("info", False),
+                         ("warning", False), ("error", False)]:
+        setattr(DeltaGenerator, _nome, _cifrao_literal(getattr(DeltaGenerator, _nome), _html, True))
+        setattr(st, _nome, _cifrao_literal(getattr(st, _nome), _html, False))
+    st.toast = _cifrao_literal(st.toast, False, False)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)
@@ -28,7 +53,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.38 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.39 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -951,9 +976,8 @@ def pagina_pedidos():
     with c7:
         st.write("")
         pago_tudo = st.checkbox("💰 Recebi o valor total", key=f"ped_pago_{k}")
-    st.markdown(f"**Total do pedido: {brl(soma_itens - desconto + frete)}**  "
-                f"<span style='color:#6b6b8a'>(itens {brl(soma_itens)} − desconto {brl(desconto)} + frete "
-                f"{brl(frete)})</span>", unsafe_allow_html=True)
+    st.markdown(f"**Total do pedido: {brl(soma_itens - desconto + frete)}**")
+    st.caption(f"itens {brl(soma_itens)} − desconto {brl(desconto)} + frete {brl(frete)}")
     obs = st.text_area("Observações", value=pedido.get("obs") or "", height=70, key=f"ped_obs_{k}")
 
     if st.button("💾 Salvar pedido", type="primary", use_container_width=True, key=f"ped_salvar_{k}"):
