@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.34 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.35 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -1095,6 +1095,9 @@ def pagina_clientes():
                           disabled=["Pedidos", "Total comprado", "Último pedido"],
                           on_change=_salvar_clientes_editados, args=(chave_cli, list(df["id"])),
                           column_config={"id": None,
+                                         # Nome e WhatsApp ficam fixos ao rolar a tabela para o lado
+                                         "Nome": st.column_config.TextColumn(pinned=True),
+                                         "WhatsApp": st.column_config.TextColumn(pinned=True),
                                          "UF": st.column_config.SelectboxColumn(options=db.UFS),
                                          "Total comprado": st.column_config.NumberColumn(format=DINHEIRO),
                                          "Excluir?": st.column_config.CheckboxColumn(
