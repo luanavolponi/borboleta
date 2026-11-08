@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.37 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.38 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -657,7 +657,8 @@ def pagina_inicio():
         st.info("Nenhum pedido em aberto. 🎉")
     else:
         linhas = []
-        for p in sorted(abertos, key=lambda x: x["prazo"] or "9999"):
+        abertos_ord = sorted(abertos, key=lambda x: x["prazo"] or "9999")
+        for p in abertos_ord:
             prazo = para_data(p["prazo"])
             if not prazo:
                 situ = "sem prazo"
@@ -668,12 +669,25 @@ def pagina_inicio():
             else:
                 situ = f"em {(prazo - hoje).days} dia(s)"
             linhas.append({"Nº": p["id"], "Cliente": p["cliente"],
-                           "Status": f"{EMOJI_STATUS.get(p['status'], '')} {p['status']}",
-                           "Prazo": fmt_data(p["prazo"]), "Situação": situ,
-                           "Total": p["total"], "A receber": p["a_receber"]})
-        st.dataframe(pd.DataFrame(linhas), hide_index=True, use_container_width=True,
-                     column_config={"Total": st.column_config.NumberColumn(format=DINHEIRO),
-                                    "A receber": st.column_config.NumberColumn(format=DINHEIRO)})
+                           "Status": f"{EMOJI_STATUS.get(p['status'], '')} {p['status']}".strip(),
+                           "Prazo": prazo, "Situação": situ, "Total": p["total"],
+                           "Recebido": float(p["valor_recebido"] or 0), "A receber": p["a_receber"],
+                           "💰 Pago": bool(p["total"] > 0 and p["a_receber"] <= 0.005)})
+        status_rot = {f"{EMOJI_STATUS.get(s, '')} {s}".strip(): s for s in db.STATUS_PEDIDO}
+        st.caption("✏️ Dá para mudar **status, prazo, valor recebido e 💰 Pago** direto aqui; salva na hora. "
+                   "Ao marcar ✅ Entregue, o pedido sai desta lista e o estoque é baixado.")
+        chave_ent = f"inicio_entregas_{ev()}"
+        st.data_editor(
+            pd.DataFrame(linhas), hide_index=True, use_container_width=True, key=chave_ent,
+            disabled=["Nº", "Cliente", "Situação", "Total", "A receber"],
+            on_change=_salvar_pedidos_editados, args=(chave_ent, [p["id"] for p in abertos_ord], {}, status_rot),
+            column_config={
+                "Status": st.column_config.SelectboxColumn(options=list(status_rot), required=True),
+                "Prazo": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "Recebido": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
+                "💰 Pago": st.column_config.CheckboxColumn(help="Marque quando o cliente pagar o valor total"),
+                "Total": st.column_config.NumberColumn(format=DINHEIRO),
+                "A receber": st.column_config.NumberColumn(format=DINHEIRO)})
     st.markdown(f"#### 🏆 Mais vendidos {sufixo}")
     top = db.itens_vendidos(ini, fim)[:8]
     if not top:
