@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.26 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.27 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -484,10 +484,7 @@ with st.sidebar:
 # =====================================================================
 
 def pagina_inicio():
-    c_logo, c_tit = st.columns([1, 7], vertical_alignment="center")
-    c_logo.image(LOGO_FUNDO_CLARO, use_container_width=True)
-    with c_tit:
-        titulo("Painel do estúdio", slogan=True)
+    titulo("Painel do estúdio", slogan=True)
     c1, _ = st.columns([1, 3])
     with c1:
         mes = seletor_mes("inicio_mes", com_todos=True)
