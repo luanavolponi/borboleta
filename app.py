@@ -1453,7 +1453,7 @@ def pagina_produtos():
                 "Insumos": sum(i["subtotal"] for i in ins_prod.get(p["id"], [])),
                 "Outros extras": p["custo_extra"] or 0.0,
                 "Margem %": mg, "Preço venda": p["preco_venda"] or 0.0,
-                "Custo": c, "Sugerido": arredondar_preco(db.preco_sugerido(c, mg, cfg["taxa_venda"])),
+                "Custo": c,
                 "Lucro/peça": (p["preco_venda"] or 0) * (1 - cfg["taxa_venda"] / 100) - c,
                 "Prontas": p["estoque_pronto"] or 0, "Ativo": bool(p["ativo"]), "Excluir?": False,
             })
@@ -1466,7 +1466,7 @@ def pagina_produtos():
         chave_cat = f"cat_editor_{ev()}"
         edit = st.data_editor(
             df, hide_index=True, use_container_width=True, key=chave_cat,
-            disabled=["Foto", "Insumos", "Custo", "Sugerido", "Lucro/peça", "Prontas"],
+            disabled=["Foto", "Insumos", "Custo", "Lucro/peça", "Prontas"],
             on_change=_salvar_produtos_editados,
             args=(chave_cat, list(df["id"]), fils_todos, imps_todas, cfg, medias),
             column_config={
@@ -1487,7 +1487,6 @@ def pagina_produtos():
                 "Margem %": st.column_config.NumberColumn(format="%.0f%%", min_value=0),
                 "Preço venda": st.column_config.NumberColumn(format=DINHEIRO, min_value=0),
                 "Custo": st.column_config.NumberColumn(format=DINHEIRO),
-                "Sugerido": st.column_config.NumberColumn(format=DINHEIRO),
                 "Lucro/peça": st.column_config.NumberColumn(format=DINHEIRO),
             })
         marcados = [int(r["id"]) for _, r in edit.iterrows() if _bool(r.get("Excluir?"))]
