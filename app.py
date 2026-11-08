@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.27 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.28 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -353,6 +353,15 @@ def card(titulo, valor, cor=ROXO, sub=""):
             f'<div class="card-s">{sub or "&nbsp;"}</div></div>')
 
 
+def card_saldo():
+    """Cartao do saldo: enquanto as vendas nao cobrem o que os socios pagaram, mostra o valor a recuperar."""
+    saldo = db.saldo_caixa()
+    if saldo < 0:
+        return ("Investido pelos sócios (a recuperar)", brl(-saldo), ROXO,
+                "pago por vocês e ainda não devolvido pelas vendas")
+    return ("Saldo em caixa", brl(saldo), VERDE, "investimento recuperado · já entrou e já foi pago")
+
+
 def linha_cards(cards):
     for col, c in zip(st.columns(len(cards)), cards):
         col.markdown(card(*c), unsafe_allow_html=True)
@@ -532,7 +541,7 @@ def pagina_inicio():
         ("A receber", brl(a_receber), AMBAR, "de pedidos já fechados"),
         ("A pagar em 30 dias", brl(sum(l["valor"] for l in a_pagar_30)), VERMELHO,
          f"inclui vencidas · total em aberto {brl(sum(l['valor'] for l in contas))}"),
-        ("Saldo em caixa", brl(db.saldo_caixa()), ROXO, "só o que já entrou e já foi pago"),
+        card_saldo(),
     ])
 
     st.markdown("#### 📌 Contas da semana")
@@ -1651,7 +1660,7 @@ def aba_movimento_mes():
          f"{brl(em_parcelas)} em parcelas" if em_parcelas else mes_label(mes)),
         ("Resultado", brl(entradas - saidas), VERDE if entradas >= saidas else VERMELHO, "entradas − despesas"),
         ("Falta pagar no mês", brl(falta_pagar), AMBAR, "contas e parcelas em aberto"),
-        ("Saldo em caixa", brl(db.saldo_caixa()), ROXO, "só o que já entrou e já foi pago"),
+        card_saldo(),
     ])
 
     with st.expander("➕ Novo lançamento à vista", expanded=not lancs):
