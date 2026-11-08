@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.30 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.31 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -690,7 +690,48 @@ def pagina_inicio():
 # =====================================================================
 
 PERSONALIZADO = "✨ Personalizado"
-COLS_ITENS = ["Produto", "Descrição", "Qtd", "Preço un.", "Filamento", "Gramas/un", "Horas/un", "Custo un."]
+COLS_ITENS = ["Produto", "Descrição", "Qtd", "Preço un.", "Filamento", "Gramas/un", "Horas/un", "Custo un.",
+              "Subtotal"]
+
+
+def _df_itens(linhas):
+    return pd.DataFrame(linhas, columns=COLS_ITENS).astype({
+        "Qtd": "float", "Preço un.": "float", "Gramas/un": "float", "Horas/un": "float", "Custo un.": "float",
+        "Subtotal": "float", "Produto": "object", "Descrição": "object", "Filamento": "object"})
+
+
+def _itens_pedido_mudou(chave_ed, chave_df, prod_opts):
+    """Aplica o que mudou na tabela de itens e preenche preco/subtotal a partir do catalogo."""
+    est = st.session_state.get(chave_ed) or {}
+    linhas = st.session_state[chave_df].to_dict("records")
+    nomes_catalogo = {p["nome"] for p in prod_opts.values()}
+
+    def preencher(r, produto_mudou):
+        prod = prod_opts.get(_txt(r.get("Produto")))
+        if produto_mudou:
+            if prod:
+                r["Preço un."] = float(prod["preco_venda"] or 0)
+                r["Descrição"] = prod["nome"]
+                r["Custo un."] = None  # calculado ao salvar, com o custo atual do catalogo
+            elif _txt(r.get("Descrição")) in nomes_catalogo:
+                r["Descrição"] = None  # virou personalizado: a descricao do produto antigo nao vale mais
+        if not _num(r.get("Qtd")):
+            r["Qtd"] = 1.0
+        r["Subtotal"] = _num(r.get("Qtd")) * _num(r.get("Preço un."))
+
+    for i, campos in est.get("edited_rows", {}).items():
+        i = int(i)
+        if i < len(linhas):
+            linhas[i].update(campos)
+            preencher(linhas[i], "Produto" in campos)
+    apagar = {int(i) for i in est.get("deleted_rows", [])}
+    linhas = [r for i, r in enumerate(linhas) if i not in apagar]
+    for nova in est.get("added_rows", []):
+        r = dict(nova)
+        preencher(r, "Produto" in r)
+        linhas.append(r)
+    st.session_state[chave_df] = _df_itens(linhas)
+    st.session_state[chave_df + "_v"] = st.session_state.get(chave_df + "_v", 0) + 1  # tabela redesenha
 
 
 def pagina_pedidos():
@@ -800,85 +841,92 @@ def pagina_pedidos():
     fil_opts = opcoes_filamentos(apenas_ativos=False)
     imp_padrao = impressora_padrao()
 
-    linhas = []
-    for it in itens:
-        linhas.append({
+    # Itens ficam guardados na sessao: ao escolher o produto, preco e subtotal se preenchem sozinhos
+    k = f"{pid or 'novo'}_{st.session_state.get('ped_v', 0)}"
+    chave_df = f"ped_itens_df_{k}"
+    if chave_df not in st.session_state:
+        linhas = [{
             "Produto": rotulo_por_id(prod_opts, it["produto_id"]) or PERSONALIZADO,
             "Descrição": it["descricao"], "Qtd": float(it["qtd"]), "Preço un.": it["preco_unit"],
             "Filamento": rotulo_por_id(fil_opts, it["filamento_id"]), "Gramas/un": it["gramas_unit"],
-            "Horas/un": None, "Custo un.": it["custo_unit"],
-        })
-    if not linhas:
-        linhas = [{c: None for c in COLS_ITENS} | {"Qtd": 1.0}]
-    df_itens = pd.DataFrame(linhas, columns=COLS_ITENS).astype({
-        "Qtd": "float", "Preço un.": "float", "Gramas/un": "float", "Horas/un": "float", "Custo un.": "float",
-        "Produto": "object", "Descrição": "object", "Filamento": "object"})
+            "Horas/un": None, "Custo un.": it["custo_unit"], "Subtotal": it["qtd"] * (it["preco_unit"] or 0),
+        } for it in itens] or [{"Qtd": 1.0}]
+        st.session_state[chave_df] = _df_itens(linhas)
+    df_itens = st.session_state[chave_df]
 
-    k = f"{pid or 'novo'}_{st.session_state.get('ped_v', 0)}"
-    with st.form(f"form_pedido_{k}"):
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            cli_escolha = st.selectbox("Cliente", list(cli_opts), index=list(cli_opts).index(cli_default),
-                                       key=f"ped_cli_{k}")
-            novo_cli_nome = st.text_input("Nome do cliente novo (se for cadastrar)", key=f"ped_ncli_{k}")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        cli_escolha = st.selectbox("Cliente", list(cli_opts), index=list(cli_opts).index(cli_default),
+                                   key=f"ped_cli_{k}")
+        if cli_opts[cli_escolha] == "novo":
+            novo_cli_nome = st.text_input("Nome do cliente novo *", key=f"ped_ncli_{k}")
             novo_cli_contato = st.text_input("WhatsApp / Instagram do cliente novo", key=f"ped_ncont_{k}")
-        with c2:
-            data_ped = st.date_input("Data do pedido", value=para_data(pedido.get("data")) or date.today(),
-                                     format="DD/MM/YYYY", key=f"ped_data_{k}")
-            prazo = st.date_input("Prazo de entrega", value=para_data(pedido.get("prazo")),
-                                  format="DD/MM/YYYY", key=f"ped_prazo_{k}")
-            status = st.selectbox("Status", db.STATUS_PEDIDO,
-                                  index=db.STATUS_PEDIDO.index(pedido.get("status") or "Confirmado"),
-                                  format_func=lambda s: f"{EMOJI_STATUS.get(s, '')} {s}", key=f"ped_status_{k}",
-                                  help="Ao marcar como ✅ Entregue, o estoque é baixado automaticamente.")
-        with c3:
-            canal_atual = pedido.get("canal") or "Instagram"
-            canal = st.selectbox("Canal de venda", db.CANAIS,
-                                 index=db.CANAIS.index(canal_atual) if canal_atual in db.CANAIS else 0,
-                                 key=f"ped_canal_{k}")
-            fp_atual = pedido.get("forma_pagamento") or "Pix"
-            forma = st.selectbox("Forma de pagamento", db.FORMAS_PAGAMENTO,
-                                 index=db.FORMAS_PAGAMENTO.index(fp_atual) if fp_atual in db.FORMAS_PAGAMENTO else 0,
-                                 key=f"ped_forma_{k}")
+        else:
+            novo_cli_nome = novo_cli_contato = ""
+    with c2:
+        data_ped = st.date_input("Data do pedido", value=para_data(pedido.get("data")) or date.today(),
+                                 format="DD/MM/YYYY", key=f"ped_data_{k}")
+        prazo = st.date_input("Prazo de entrega", value=para_data(pedido.get("prazo")),
+                              format="DD/MM/YYYY", key=f"ped_prazo_{k}")
+        status = st.selectbox("Status", db.STATUS_PEDIDO,
+                              index=db.STATUS_PEDIDO.index(pedido.get("status") or "Confirmado"),
+                              format_func=lambda s: f"{EMOJI_STATUS.get(s, '')} {s}", key=f"ped_status_{k}",
+                              help="Ao marcar como ✅ Entregue, o estoque é baixado automaticamente.")
+    with c3:
+        canal_atual = pedido.get("canal") or "Instagram"
+        canal = st.selectbox("Canal de venda", db.CANAIS,
+                             index=db.CANAIS.index(canal_atual) if canal_atual in db.CANAIS else 0,
+                             key=f"ped_canal_{k}")
+        fp_atual = pedido.get("forma_pagamento") or "Pix"
+        forma = st.selectbox("Forma de pagamento", db.FORMAS_PAGAMENTO,
+                             index=db.FORMAS_PAGAMENTO.index(fp_atual) if fp_atual in db.FORMAS_PAGAMENTO else 0,
+                             key=f"ped_forma_{k}")
 
-        st.markdown("**Itens do pedido**")
-        st.caption("Escolha um produto do catálogo — preço, custo e filamento vêm sozinhos (deixe em branco). "
-                   "Para peças sob encomenda, escolha ✨ Personalizado e preencha descrição, preço, filamento, "
-                   "gramas e horas de impressão. Use o ➕ embaixo da tabela para adicionar linhas.")
-        itens_edit = st.data_editor(
-            df_itens, num_rows="dynamic", hide_index=True, use_container_width=True, key=f"ped_itens_{k}",
-            column_config={
-                "Produto": st.column_config.SelectboxColumn(options=[PERSONALIZADO] + prod_ativos, width="medium"),
-                "Descrição": st.column_config.TextColumn(width="medium"),
-                "Qtd": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
-                "Preço un.": st.column_config.NumberColumn(min_value=0, format=DINHEIRO),
-                "Filamento": st.column_config.SelectboxColumn(options=list(fil_opts), width="medium",
-                                                              help="Só para itens personalizados"),
-                "Gramas/un": st.column_config.NumberColumn(min_value=0, format="%.0f g"),
-                "Horas/un": st.column_config.NumberColumn(min_value=0, format="%.2f h",
-                                                          help="Tempo de impressão (personalizados)"),
-                "Custo un.": st.column_config.NumberColumn(min_value=0, format=DINHEIRO,
-                                                           help="Deixe em branco para calcular sozinho"),
-            })
+    st.markdown("**🛒 Itens do pedido**")
+    st.caption("Escolha o **produto** na lista e a **quantidade**: o preço do catálogo e o subtotal aparecem "
+               "sozinhos (dá para mudar o preço, se precisar). Para mais itens, use o ➕ embaixo da tabela. "
+               "Peça sob encomenda: escolha ✨ Personalizado e preencha descrição, preço, filamento, gramas e horas.")
+    tem_pers = bool((df_itens["Produto"] == PERSONALIZADO).any())
+    ordem = ["Produto", "Qtd", "Preço un.", "Subtotal"] + (
+        ["Descrição", "Filamento", "Gramas/un", "Horas/un"] if tem_pers else [])
+    chave_ed = f"ped_itens_{k}_{st.session_state.get(chave_df + '_v', 0)}"
+    st.data_editor(
+        df_itens, num_rows="dynamic", hide_index=True, use_container_width=True, key=chave_ed,
+        column_order=ordem, disabled=["Subtotal"],
+        on_change=_itens_pedido_mudou, args=(chave_ed, chave_df, prod_opts),
+        column_config={
+            "Produto": st.column_config.SelectboxColumn(options=prod_ativos + [PERSONALIZADO], width="large"),
+            "Qtd": st.column_config.NumberColumn(min_value=1, step=1, format="%d", width="small"),
+            "Preço un.": st.column_config.NumberColumn(min_value=0, format=DINHEIRO),
+            "Subtotal": st.column_config.NumberColumn(format=DINHEIRO),
+            "Descrição": st.column_config.TextColumn(width="medium", help="Só para itens personalizados"),
+            "Filamento": st.column_config.SelectboxColumn(options=list(fil_opts), width="medium",
+                                                          help="Só para itens personalizados"),
+            "Gramas/un": st.column_config.NumberColumn(min_value=0, format="%.0f g"),
+            "Horas/un": st.column_config.NumberColumn(min_value=0, format="%.2f h",
+                                                      help="Tempo de impressão (personalizados)"),
+        })
+    soma_itens = float(df_itens["Subtotal"].fillna(0).sum())
 
-        c4, c5, c6, c7 = st.columns(4)
-        desconto = c4.number_input("Desconto (R$)", min_value=0.0, step=1.0,
-                                   value=float(pedido.get("desconto") or 0), key=f"ped_desc_{k}")
-        frete = c5.number_input("Frete cobrado (R$)", min_value=0.0, step=1.0,
-                                value=float(pedido.get("frete") or 0), key=f"ped_frete_{k}")
-        recebido = c6.number_input("Valor já recebido (R$)", min_value=0.0, step=1.0,
-                                   value=float(pedido.get("valor_recebido") or 0), key=f"ped_receb_{k}",
-                                   help="Entra automaticamente no Financeiro como venda.")
-        with c7:
-            st.write("")
-            pago_tudo = st.checkbox("💰 Recebi o valor total", key=f"ped_pago_{k}")
-        obs = st.text_area("Observações", value=pedido.get("obs") or "", height=70, key=f"ped_obs_{k}")
+    c4, c5, c6, c7 = st.columns(4)
+    desconto = c4.number_input("Desconto (R$)", min_value=0.0, step=1.0,
+                               value=float(pedido.get("desconto") or 0), key=f"ped_desc_{k}")
+    frete = c5.number_input("Frete cobrado (R$)", min_value=0.0, step=1.0,
+                            value=float(pedido.get("frete") or 0), key=f"ped_frete_{k}")
+    recebido = c6.number_input("Valor já recebido (R$)", min_value=0.0, step=1.0,
+                               value=float(pedido.get("valor_recebido") or 0), key=f"ped_receb_{k}",
+                               help="Entra automaticamente no Financeiro como venda.")
+    with c7:
+        st.write("")
+        pago_tudo = st.checkbox("💰 Recebi o valor total", key=f"ped_pago_{k}")
+    st.markdown(f"**Total do pedido: {brl(soma_itens - desconto + frete)}**  "
+                f"<span style='color:#6b6b8a'>(itens {brl(soma_itens)} − desconto {brl(desconto)} + frete "
+                f"{brl(frete)})</span>", unsafe_allow_html=True)
+    obs = st.text_area("Observações", value=pedido.get("obs") or "", height=70, key=f"ped_obs_{k}")
 
-        enviar = st.form_submit_button("💾 Salvar pedido", type="primary", use_container_width=True)
-
-    if enviar:
+    if st.button("💾 Salvar pedido", type="primary", use_container_width=True, key=f"ped_salvar_{k}"):
         novos_itens = []
-        for _, r in itens_edit.iterrows():
+        for _, r in st.session_state[chave_df].iterrows():
             prod_label = _txt(r.get("Produto"))
             desc = _txt(r.get("Descrição"))
             prod = prod_opts.get(prod_label) if prod_label and prod_label != PERSONALIZADO else None
