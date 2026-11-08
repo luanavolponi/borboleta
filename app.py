@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.33 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.34 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -790,7 +790,7 @@ def pagina_pedidos():
         rot_por_id = {v: k for k, v in cli_rot.items()}
         status_rot = {f"{EMOJI_STATUS.get(s, '')} {s}".strip(): s for s in db.STATUS_PEDIDO}
         df = pd.DataFrame([{
-            "Nº": p["id"], "Qtd itens": int(p["qtd_itens"] or 0), "Itens": p["itens_txt"] or "",
+            "Nº": p["id"], "Descrição do pedido": p["itens_txt"] or "(sem itens)",
             "Cliente": rot_por_id.get(p["cliente_id"], SEM_CLIENTE),
             "Status": f"{EMOJI_STATUS.get(p['status'], '')} {p['status']}".strip(),
             "Prazo": para_data(p["prazo"]),
@@ -805,11 +805,10 @@ def pagina_pedidos():
         chave_tab = f"ped_tab_{'-'.join(status_sel)}_{periodo}_{ev()}"
         st.data_editor(
             df, hide_index=True, use_container_width=True, key=chave_tab,
-            disabled=["Nº", "Qtd itens", "Itens", "Total", "A receber", "Lucro est."],
+            disabled=["Nº", "Descrição do pedido", "Total", "A receber", "Lucro est."],
             on_change=_salvar_pedidos_editados, args=(chave_tab, list(df["Nº"]), cli_rot, status_rot),
             column_config={
-                "Qtd itens": st.column_config.NumberColumn(format="%d", width="small"),
-                "Itens": st.column_config.TextColumn(width="large"),
+                "Descrição do pedido": st.column_config.TextColumn(width="large", help="Quantidade e nome de cada item"),
                 "Prazo": st.column_config.DateColumn(format="DD/MM/YYYY"),
                 "Cliente": st.column_config.SelectboxColumn(options=list(cli_rot), width="medium", required=True),
                 "Status": st.column_config.SelectboxColumn(options=list(status_rot), required=True,
