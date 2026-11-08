@@ -52,7 +52,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.43 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.44 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -534,6 +534,18 @@ def _salvar_pedidos_editados(chave, ids, cli_rot, status_rot):
     if feitos:
         st.session_state["ped_v"] = st.session_state.get("ped_v", 0) + 1  # o formulario abaixo recarrega
         salvo(f"Pedido {', '.join(feitos)} salvo!")
+
+
+def _salvar_notas_patrimonio(chave, chaves):
+    """Salva na hora a observacao editada na tabela de patrimonio."""
+    mudancas = (st.session_state.get(chave) or {}).get("edited_rows", {})
+    feitos = 0
+    for linha, campos in mudancas.items():
+        if "Observação" in campos:
+            db.salvar_nota_patrimonio(chaves[int(linha)], _txt(campos["Observação"]))
+            feitos += 1
+    if feitos:
+        salvo("Observação salva!")
 
 
 COLUNAS_INSUMO = {"Insumo": "nome", "Unidade": "unidade", "Custo un.": "custo_unit", "Mínimo": "estoque_minimo",
@@ -1740,8 +1752,42 @@ def form_compra(tipo, opcoes, unidade_fn, key):
 
 def pagina_estoque():
     titulo("📦 Estoque")
-    tab_fil, tab_ins, tab_prod, tab_hist = st.tabs(
-        ["🧵 Filamentos", "🧰 Insumos", "🎁 Peças prontas", "📜 Histórico"])
+    tab_fil, tab_ins, tab_prod, tab_pat, tab_hist = st.tabs(
+        ["🧵 Filamentos", "🧰 Insumos", "🎁 Peças prontas", "🏛️ Patrimônio", "📜 Histórico"])
+
+    # ---------- Patrimonio: equipamentos do estudio (compras da categoria Equipamentos)
+    with tab_pat:
+        bens = db.listar_patrimonio()
+        if not bens:
+            st.info("Nenhum equipamento ainda. Compras lançadas no 💰 Financeiro com a categoria **Equipamentos** "
+                    "aparecem aqui sozinhas.")
+        else:
+            linha_cards([
+                ("Patrimônio do estúdio", brl(sum(b["valor"] for b in bens)), ROXO, f"{len(bens)} item(ns)"),
+                ("Já pago", brl(sum(b["pago"] for b in bens)), VERDE, "parcelas vencidas e compras à vista"),
+                ("Falta pagar", brl(sum(b["falta"] for b in bens)), VERMELHO, "parcelas que ainda vão vencer"),
+            ])
+            st.caption("Tudo o que foi comprado como **Equipamentos** (impressora, ferramentas, organizadores…). "
+                       "Para incluir um item, lance a compra no 💰 Financeiro com essa categoria. A coluna "
+                       "**Observação** (onde fica, garantia, número de série…) é salva na hora.")
+            df_pat = pd.DataFrame([{
+                "Item": b["item"], "Data da compra": para_data(b["data"]), "Valor": b["valor"],
+                "Pagamento": b["pagamento"], "Já pago": b["pago"], "Falta pagar": b["falta"],
+                "Observação": b["obs"],
+            } for b in bens])
+            chave_pat = f"pat_editor_{ev()}"
+            st.data_editor(
+                df_pat, hide_index=True, use_container_width=True, key=chave_pat,
+                disabled=["Item", "Data da compra", "Valor", "Pagamento", "Já pago", "Falta pagar"],
+                on_change=_salvar_notas_patrimonio, args=(chave_pat, [b["chave"] for b in bens]),
+                column_config={
+                    "Item": st.column_config.TextColumn(pinned=True, width="large"),
+                    "Data da compra": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                    "Valor": st.column_config.NumberColumn(format=DINHEIRO),
+                    "Já pago": st.column_config.NumberColumn(format=DINHEIRO),
+                    "Falta pagar": st.column_config.NumberColumn(format=DINHEIRO),
+                    "Observação": st.column_config.TextColumn(width="large"),
+                })
 
     # ---------- Filamentos
     with tab_fil:

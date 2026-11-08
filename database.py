@@ -5,6 +5,7 @@ Estoque de filamentos/insumos/produtos, clientes, pedidos e financeiro.
 """
 import calendar
 import os
+import re
 import sqlite3
 from datetime import date, datetime
 
@@ -215,6 +216,10 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT,
             quando TEXT
+        );
+        CREATE TABLE IF NOT EXISTS patrimonio_notas (
+            chave TEXT PRIMARY KEY,            -- p<id da compra parcelada> ou l<id do lancamento a vista>
+            obs TEXT DEFAULT ''
         );
         """)
         # Migracoes: colunas novas em bancos ja existentes
@@ -799,6 +804,36 @@ def listar_parcelamentos():
             p["valor_restante"] = sum(l["valor"] for l in parcelas if not l["pago"])
             p["proxima"] = next((l for l in parcelas if not l["pago"]), None)
     return compras
+
+
+def listar_patrimonio():
+    """Bens do estudio = compras da categoria Equipamentos (parceladas agrupadas numa linha so)."""
+    limpar = lambda d: re.sub(r"\s*\(cart[aã]o[^)]*\)", "", d or "").strip()  # noqa: E731
+    with _conn() as c:
+        notas = {r[0]: r[1] for r in c.execute("SELECT chave, obs FROM patrimonio_notas")}
+        itens = []
+        for p in _rows(c.execute("SELECT * FROM compras_parceladas WHERE categoria='Equipamentos'")):
+            parc = _rows(c.execute("SELECT valor, pago FROM lancamentos WHERE parcelamento_id=?", (p["id"],)))
+            itens.append({"chave": f"p{p['id']}", "item": limpar(p["descricao"]), "fornecedor": p["fornecedor"] or "",
+                          "data": p["data_compra"], "valor": p["valor_total"],
+                          "pagamento": f"{p['n_parcelas']}x · {p['forma_pagamento'] or ''}".strip(" ·"),
+                          "pago": sum(l["valor"] for l in parc if l["pago"]),
+                          "falta": sum(l["valor"] for l in parc if not l["pago"])})
+        for l in _rows(c.execute("""SELECT * FROM lancamentos WHERE tipo='saida' AND categoria='Equipamentos'
+                                    AND parcelamento_id IS NULL""")):
+            pago = bool(l["pago"] if l["pago"] is not None else 1)
+            itens.append({"chave": f"l{l['id']}", "item": limpar(l["descricao"]), "fornecedor": "",
+                          "data": l["data_compra"] or l["data"], "valor": l["valor"],
+                          "pagamento": f"à vista · {l['forma_pagamento'] or ''}".strip(" ·"),
+                          "pago": l["valor"] if pago else 0.0, "falta": 0.0 if pago else l["valor"]})
+    for it in itens:
+        it["obs"] = notas.get(it["chave"], "")
+    return sorted(itens, key=lambda x: x["data"] or "", reverse=True)
+
+
+def salvar_nota_patrimonio(chave, obs):
+    with _conn() as c:
+        c.execute("INSERT OR REPLACE INTO patrimonio_notas(chave, obs) VALUES (?, ?)", (chave, obs or ""))
 
 
 def excluir_parcelamento(parc_id):
