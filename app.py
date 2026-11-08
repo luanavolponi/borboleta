@@ -28,7 +28,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.29 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.30 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -446,6 +446,54 @@ def aplicar_edicoes(tabela, df_editado, converter):
     return alterados, excluidos
 
 
+SEM_CLIENTE = "— sem cliente —"
+
+
+def _data_iso(v):
+    """Valor de uma coluna de data do data_editor (texto ISO, date ou vazio) -> 'YYYY-MM-DD' ou None."""
+    if v is None or (isinstance(v, float) and pd.isna(v)) or v == "":
+        return None
+    return v.isoformat()[:10] if hasattr(v, "isoformat") else str(v)[:10]
+
+
+def _salvar_pedidos_editados(chave, ids, cli_rot, status_rot):
+    """Salva na hora o que foi editado na tabela de pedidos, pelo mesmo caminho do formulario
+    (estoque e recebimento no Financeiro sao sincronizados)."""
+    mudancas = (st.session_state.get(chave) or {}).get("edited_rows", {})
+    feitos = []
+    for linha, campos in mudancas.items():
+        pid = int(ids[int(linha)])
+        pedido, itens = db.obter_pedido(pid)
+        if not pedido:
+            continue
+        p = {k: pedido.get(k) for k in ["cliente_id", "data", "prazo", "status", "canal", "forma_pagamento",
+                                         "desconto", "frete", "valor_recebido", "obs"]}
+        total = (sum((i["qtd"] or 0) * (i["preco_unit"] or 0) for i in itens)
+                 - (pedido.get("desconto") or 0) + (pedido.get("frete") or 0))
+        for col, v in campos.items():
+            if col == "Cliente" and v in cli_rot:
+                p["cliente_id"] = cli_rot[v]
+            elif col == "Data" and _data_iso(v):
+                p["data"] = _data_iso(v)
+            elif col == "Prazo":
+                p["prazo"] = _data_iso(v)
+            elif col == "Status" and v in status_rot:
+                p["status"] = status_rot[v]
+            elif col == "Canal":
+                p["canal"] = _txt(v)
+            elif col == "Pagamento":
+                p["forma_pagamento"] = _txt(v)
+            elif col == "Recebido":
+                p["valor_recebido"] = max(0.0, _num(v))
+            elif col == "💰 Pago" and "Recebido" not in campos:
+                p["valor_recebido"] = total if _bool(v) else 0.0
+        db.salvar_pedido(p, itens, pid, USUARIO)
+        feitos.append(f"#{pid}")
+    if feitos:
+        st.session_state["ped_v"] = st.session_state.get("ped_v", 0) + 1  # o formulario abaixo recarrega
+        salvo(f"Pedido {', '.join(feitos)} salvo!")
+
+
 COLUNAS_CLIENTE = {"Nome": "nome", "WhatsApp": "telefone", "Instagram": "instagram", "E-mail": "email",
                    "CEP": "cep", "Rua": "endereco", "Número": "numero", "Complemento": "complemento",
                    "Bairro": "bairro", "Cidade": "cidade", "UF": "uf", "Obs": "obs"}
@@ -677,25 +725,43 @@ def pagina_pedidos():
             ("A receber", brl(sum(p["a_receber"] for p in validos)), AMBAR, ""),
             ("Lucro estimado", brl(sum(p["lucro"] for p in validos)), ROSA, "vendas − custo das peças"),
         ])
+        clientes_tab = db.listar("clientes")
+        nomes_cli = [c["nome"] for c in clientes_tab]
+        cli_rot = {SEM_CLIENTE: None}
+        cli_rot.update({(f"{c['nome']} (#{c['id']})" if nomes_cli.count(c["nome"]) > 1 else c["nome"]): c["id"]
+                        for c in clientes_tab})
+        rot_por_id = {v: k for k, v in cli_rot.items()}
+        status_rot = {f"{EMOJI_STATUS.get(s, '')} {s}".strip(): s for s in db.STATUS_PEDIDO}
         df = pd.DataFrame([{
-            "Nº": p["id"], "Data": fmt_data(p["data"]), "Cliente": p["cliente"],
-            "Status": f"{EMOJI_STATUS.get(p['status'], '')} {p['status']}",
-            "Total": p["total"], "Recebido": p["valor_recebido"] or 0, "A receber": p["a_receber"],
-            "Lucro est.": p["lucro"], "Prazo": fmt_data(p["prazo"]), "Canal": p["canal"] or "",
+            "Nº": p["id"], "Data": para_data(p["data"]), "Cliente": rot_por_id.get(p["cliente_id"], SEM_CLIENTE),
+            "Status": f"{EMOJI_STATUS.get(p['status'], '')} {p['status']}".strip(),
+            "Total": p["total"], "Recebido": float(p["valor_recebido"] or 0),
+            "💰 Pago": bool(p["total"] > 0 and p["a_receber"] <= 0.005),
+            "A receber": p["a_receber"], "Lucro est.": p["lucro"], "Prazo": para_data(p["prazo"]),
+            "Canal": p["canal"] or "", "Pagamento": p["forma_pagamento"] or "",
         } for p in peds])
-        st.caption("👆 **Clique num pedido** (na caixinha à esquerda da linha) para abrir e editar logo abaixo.")
-        # A chave muda com os filtros e a cada salvamento: a selecao antiga nao aponta para outra linha
-        chave_tab = f"ped_tab_{'-'.join(status_sel)}_{periodo}_{st.session_state.get('ped_v', 0)}"
-        tabela = st.dataframe(df, hide_index=True, use_container_width=True, on_select="rerun",
-                              selection_mode="single-row", key=chave_tab, column_config={
-                                  c: st.column_config.NumberColumn(format=DINHEIRO)
-                                  for c in ["Total", "Recebido", "A receber", "Lucro est."]})
-        linhas_sel = tabela.selection.rows if tabela else []
-        clicado = int(df.iloc[linhas_sel[0]]["Nº"]) if linhas_sel else None
-        if clicado != st.session_state.get("ped_tab_ultimo"):
-            st.session_state["ped_tab_ultimo"] = clicado
-            if clicado:
-                st.session_state["ped_sel_next_id"] = clicado  # abre no editor abaixo
+        st.caption("✏️ **Edite direto na tabela:** status, datas, cliente, canal, pagamento e valor recebido "
+                   "(ou marque **💰 Pago**). Cada alteração é salva na hora, com estoque e Financeiro juntos. "
+                   "Para mudar os **itens**, abra o pedido logo abaixo.")
+        # A chave muda com os filtros e a cada salvamento: a tabela sempre mostra o que esta no banco
+        chave_tab = f"ped_tab_{'-'.join(status_sel)}_{periodo}_{ev()}"
+        st.data_editor(
+            df, hide_index=True, use_container_width=True, key=chave_tab,
+            disabled=["Nº", "Total", "A receber", "Lucro est."],
+            on_change=_salvar_pedidos_editados, args=(chave_tab, list(df["Nº"]), cli_rot, status_rot),
+            column_config={
+                "Data": st.column_config.DateColumn(format="DD/MM/YYYY", required=True),
+                "Prazo": st.column_config.DateColumn(format="DD/MM/YYYY"),
+                "Cliente": st.column_config.SelectboxColumn(options=list(cli_rot), width="medium", required=True),
+                "Status": st.column_config.SelectboxColumn(options=list(status_rot), required=True,
+                                                           help="✅ Entregue baixa o estoque automaticamente"),
+                "Canal": st.column_config.SelectboxColumn(options=db.CANAIS),
+                "Pagamento": st.column_config.SelectboxColumn(options=db.FORMAS_PAGAMENTO),
+                "Recebido": st.column_config.NumberColumn(format=DINHEIRO, min_value=0,
+                                                          help="Entra no Financeiro como venda"),
+                "💰 Pago": st.column_config.CheckboxColumn(help="Marque quando o cliente pagar o valor total"),
+                **{c: st.column_config.NumberColumn(format=DINHEIRO) for c in ["Total", "A receber", "Lucro est."]},
+            })
     else:
         st.info("Nenhum pedido encontrado com esses filtros.")
 
@@ -712,7 +778,7 @@ def pagina_pedidos():
     if st.session_state.get("ped_sel") not in opcoes:
         st.session_state["ped_sel"] = "➕ Novo pedido"
 
-    escolha = st.selectbox("✏️ Abrir pedido para editar (ou criar um novo)", list(opcoes), key="ped_sel")
+    escolha = st.selectbox("🧩 Abrir pedido completo (itens, desconto, frete, observações) ou criar um novo", list(opcoes), key="ped_sel")
     pid = opcoes[escolha]
     pedido, itens = db.obter_pedido(pid) if pid else ({}, [])
     st.markdown(f"#### {'✏️ Editando pedido #' + str(pid) if pid else '➕ Novo pedido'}")
