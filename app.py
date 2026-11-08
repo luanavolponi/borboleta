@@ -4,7 +4,6 @@ Borboleta Estudio Criativo — gestao da empresa (impressao 3D).
 Pedidos, clientes, produtos & precificacao, estoque e financeiro.
 """
 import base64
-import html
 import io
 import math
 import os
