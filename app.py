@@ -52,7 +52,7 @@ LOGO_FUNDO_AZUL = os.path.join(ASSETS, "logo-fundo-azul.png")    # versao princi
 LOGO_FUNDO_CLARO = os.path.join(ASSETS, "logo-fundo-claro.png")  # nome em azul, p/ fundo branco
 SIMBOLO = os.path.join(ASSETS, "simbolo.png")                    # B com asas
 SLOGAN = "Feito para transformar."
-VERSAO = "1.46 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
+VERSAO = "1.47 · 08/11/2026"  # atualizar a cada publicacao: aparece no login e no menu
 
 AZUL = "#190A76"      # fundo principal, textos
 ROSA = "#F1287C"      # o B e titulos grandes
@@ -1576,10 +1576,11 @@ def pagina_produtos():
             if qtd_bandeja > 1:
                 st.caption(f"Cada peça usa **{gramas_un:.1f} g** e **{horas_un * 60:.0f} min** de impressora "
                            f"({qtd_bandeja} peças na bandeja).")
-                linha_cards([("Bandeja inteira: custo", brl(custo["total"] * qtd_bandeja), VERMELHO,
-                              f"{qtd_bandeja} peças"),
-                             ("Bandeja inteira: venda", brl(preco_r * qtd_bandeja), ROXO, "no preço sugerido"),
-                             ("Bandeja inteira: lucro", brl(lucro * qtd_bandeja), VERDE, "já descontada a taxa")])
+                st.markdown(f"##### Resultado (bandeja inteira · {qtd_bandeja} peças)")
+                linha_cards([("Preço sugerido", brl(preco_r * qtd_bandeja), ROXO,
+                              f"exato: {brl(preco * qtd_bandeja)}"),
+                             ("Custo", brl(custo["total"] * qtd_bandeja), VERMELHO, ""),
+                             ("Lucro", brl(lucro * qtd_bandeja), VERDE, "já descontada a taxa")])
             partes = {k: v for k, v in custo.items() if k != "total"}
             partes["TOTAL"] = custo["total"]
             df_c = pd.DataFrame({"Parte do custo": list(partes), "Por peça": list(partes.values())})
